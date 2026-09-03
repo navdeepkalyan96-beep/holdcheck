@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+:root {
+  --font-display: "Avenir Next", "Century Gothic", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+}
+
+@theme inline {
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+}
+
+body {
+  font-family: var(--font-display);
+}
