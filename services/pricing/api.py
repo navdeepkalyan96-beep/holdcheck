@@ -1,14 +1,4 @@
-"""
-api.py — FastAPI pricing/ticket service.
-
-v0-live scope: no auth, no DB, no broker OAuth. Stateless — accepts a CSV of
-positions (or a single JSON position) and returns computed tickets. This is
-deliberately the smallest slice that's useful: point it at a tradebook CSV
-you export from your broker and get back the same ticket the full product
-would eventually compute live.
-
-Run: uvicorn api:app --reload --port 8000
-"""
+"""HoldCheck pricing API — v1 tickets from CSV or a single position."""
 
 import csv
 import io
@@ -20,9 +10,8 @@ from pydantic import BaseModel
 
 from ticket_builder import build_ticket, IST
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.1.0")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.2.0")
 
-# TODO: lock this down to your deployed frontend origin before going public
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,11 +22,11 @@ app.add_middleware(
 
 class Position(BaseModel):
     underlying: str = "NIFTY"
-    expiry: str          # YYYY-MM-DD
+    expiry: str
     strike: float
-    option_type: str     # 'CE' | 'PE'
+    option_type: str
     lot_size: int
-    side: str             # 'LONG' | 'SHORT'
+    side: str
     lots: int
     entry_price: float
     ltp: float | None = None
@@ -48,13 +37,17 @@ class Position(BaseModel):
     atm_pe_premium: float
     forward: float
     target_net: float | None = None
+    stop_loss: float | None = None
     max_loss: float | None = None
+    hours_held: float | None = None
+    entry_time: str | None = None
+    oi_ladder: str | None = None
 
 
 CSV_COLUMNS = [
     "underlying", "expiry", "strike", "option_type", "lot_size", "side", "lots",
     "entry_price", "ltp", "bid", "ask", "iv_atm", "atm_ce_premium", "atm_pe_premium",
-    "forward", "target_net", "max_loss",
+    "forward", "target_net", "stop_loss", "hours_held", "oi_ladder",
 ]
 
 
@@ -65,14 +58,14 @@ def health():
 
 @app.get("/csv-template")
 def csv_template():
-    """Returns the expected CSV column order + one example row, so the frontend
-    can offer a download-template button."""
     example = {
         "underlying": "NIFTY", "expiry": "2026-09-04", "strike": 24800,
         "option_type": "CE", "lot_size": 25, "side": "LONG", "lots": 2,
         "entry_price": 142.0, "ltp": 108.5, "bid": 107.0, "ask": 110.0,
         "iv_atm": 0.135, "atm_ce_premium": 118.0, "atm_pe_premium": 96.0,
-        "forward": 24812.0, "target_net": 5000.0, "max_loss": "",
+        "forward": 24812.0, "target_net": 5000.0, "stop_loss": 2500.0,
+        "hours_held": 6.0,
+        "oi_ladder": "24750:800,900,1200,1500|24775:700,720,1100,1300|24800:1000,1400,900,800|24825:900,1300,700,680|24850:850,1500,600,500",
     }
     return {"columns": CSV_COLUMNS, "example_row": example}
 
@@ -80,9 +73,19 @@ def csv_template():
 @app.post("/tickets/position")
 def ticket_for_position(pos: Position):
     try:
-        return build_ticket(pos.model_dump())
+        data = pos.model_dump()
+        if data.get("stop_loss") is None:
+            data["stop_loss"] = data.get("max_loss")
+        return build_ticket(data)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not compute ticket: {e}")
+
+
+def _f(row, key):
+    v = row.get(key)
+    if v is None or str(v).strip() == "":
+        return None
+    return float(v)
 
 
 @app.post("/tickets/csv")
@@ -92,16 +95,18 @@ async def tickets_from_csv(file: UploadFile = File(...)):
 
     raw = (await file.read()).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(raw))
-
-    missing_cols = set(["underlying", "expiry", "strike", "option_type", "lot_size",
-                         "side", "lots", "entry_price", "iv_atm", "atm_ce_premium",
-                         "atm_pe_premium", "forward"]) - set(reader.fieldnames or [])
-    if missing_cols:
-        raise HTTPException(status_code=400, detail=f"CSV missing required columns: {sorted(missing_cols)}")
+    missing = {"underlying", "expiry", "strike", "option_type", "lot_size",
+               "side", "lots", "entry_price", "iv_atm", "atm_ce_premium",
+               "atm_pe_premium", "forward"} - set(reader.fieldnames or [])
+    if missing:
+        raise HTTPException(status_code=400, detail=f"CSV missing required columns: {sorted(missing)}")
 
     tickets, errors = [], []
-    for i, row in enumerate(reader, start=2):  # row 1 is header
+    for i, row in enumerate(reader, start=2):
         try:
+            sl = _f(row, "stop_loss")
+            if sl is None:
+                sl = _f(row, "max_loss")
             pos = {
                 "underlying": row["underlying"],
                 "expiry": row["expiry"],
@@ -111,15 +116,18 @@ async def tickets_from_csv(file: UploadFile = File(...)):
                 "side": row["side"].strip().upper(),
                 "lots": int(row["lots"]),
                 "entry_price": float(row["entry_price"]),
-                "ltp": float(row["ltp"]) if row.get("ltp") else None,
-                "bid": float(row["bid"]) if row.get("bid") else None,
-                "ask": float(row["ask"]) if row.get("ask") else None,
+                "ltp": _f(row, "ltp"),
+                "bid": _f(row, "bid"),
+                "ask": _f(row, "ask"),
                 "iv_atm": float(row["iv_atm"]),
                 "atm_ce_premium": float(row["atm_ce_premium"]),
                 "atm_pe_premium": float(row["atm_pe_premium"]),
                 "forward": float(row["forward"]),
-                "target_net": float(row["target_net"]) if row.get("target_net") else None,
-                "max_loss": float(row["max_loss"]) if row.get("max_loss") else None,
+                "target_net": _f(row, "target_net"),
+                "stop_loss": sl,
+                "hours_held": _f(row, "hours_held"),
+                "entry_time": row.get("entry_time") or None,
+                "oi_ladder": row.get("oi_ladder") or None,
             }
             tickets.append(build_ticket(pos))
         except Exception as e:

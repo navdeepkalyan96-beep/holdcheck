@@ -1,146 +1,103 @@
 """
-state_classifier.py — On plan / Hope / Fear / Dead for long premium positions,
-and the seller-mode variant (Safe / At risk / Near danger / Expiring safe).
+Three-state classifier used in the v1 app.
 
-Pure function. Priority order matters — see SPEC.md section 4. These thresholds
-(DEFAULT_FEAR_FRACTION etc.) are product decisions, not derived constants —
-tune them, but keep them named and visible, never hardcode inline elsewhere.
+  on_plan  (Safe)  — plan is still inside what this expiry is pricing
+  at_risk          — plan is stretched vs expected move or vs SL
+  dead             — plan is not reachable in remaining life / SL is gone
+
+Thresholds are product constants. Tune here only.
 """
 
 from dataclasses import dataclass
 from enum import Enum
 
 
-class BuyerState(str, Enum):
+class PositionState(str, Enum):
     ON_PLAN = "on_plan"
-    HOPE = "hope"
-    FEAR = "fear"
+    AT_RISK = "at_risk"
     DEAD = "dead"
 
 
-class SellerState(str, Enum):
-    SAFE = "safe"
-    AT_RISK = "at_risk"
-    NEAR_DANGER = "near_danger"
-    EXPIRING_SAFE = "expiring_safe"
-
-
-DEFAULT_FEAR_FRACTION = 0.80
 DEFAULT_DEAD_MULTIPLE = 2.0
 DEFAULT_LOW_TIME_MIN = 30.0
-DEFAULT_PLAUSIBLE_TIME_MIN = 15.0
+DEFAULT_SL_BURN = 0.80
 
 
 @dataclass(frozen=True)
-class BuyerClassification:
-    state: BuyerState
+class Classification:
+    state: PositionState
     low_confidence: bool
     reason: str
 
 
-def classify_buyer(
+def classify(
+    *,
+    side: str,
     net_now: float,
-    target_net: float,
-    required_move_pts: float,
+    target_net: float | None,
+    stop_loss: float | None,
+    required_move_pts: float | None,
     expected_move_pts: float,
     time_to_worthless_min: float | None,
-    fear_fraction: float = DEFAULT_FEAR_FRACTION,
+    target_reachable: bool,
     dead_multiple: float = DEFAULT_DEAD_MULTIPLE,
     low_time_min: float = DEFAULT_LOW_TIME_MIN,
-    plausible_time_min: float = DEFAULT_PLAUSIBLE_TIME_MIN,
-) -> BuyerClassification:
+    sl_burn: float = DEFAULT_SL_BURN,
+) -> Classification:
     """
-    target_net must always be provided — caller substitutes the inferred
-    50%-premium placeholder if the user set no Plan, and the DTO must carry a
-    separate `plan_is_inferred` flag so the UI can show "no plan" honestly.
+    Data rules
+    ----------
+    DEAD
+      - target unreachable under IV unchanged, or
+      - |required_move| > dead_multiple * expected_move, or
+      - time_to_worthless < 30 min (longs), or
+      - stop-loss is a positive number and net_now <= -abs(stop_loss)
+        (long: loss at/through SL; short: same, SL is max loss in rupees)
 
-    time_to_worthless_min == None means "cannot estimate" (e.g. theta ~ 0) —
-    treated as low_confidence, not as a de facto Dead or On-plan signal.
-    """
-    low_confidence = time_to_worthless_min is None
+    AT_RISK
+      - |required_move| > expected_move, or
+      - net_now <= -sl_burn * abs(stop_loss) when SL is set
 
-    # Priority 1: Fear — checked first regardless of the move relationship,
-    # because a near-target winner should never get buried under Hope/Dead logic.
-    if target_net > 0 and net_now >= fear_fraction * target_net:
-        return BuyerClassification(
-            BuyerState.FEAR, low_confidence,
-            f"net now (₹{net_now:.0f}) is ≥{fear_fraction*100:.0f}% of target (₹{target_net:.0f})",
-        )
-
-    ttw = time_to_worthless_min if time_to_worthless_min is not None else float("inf")
-
-    # Priority 2: Dead
-    if required_move_pts > dead_multiple * expected_move_pts or ttw < low_time_min:
-        return BuyerClassification(
-            BuyerState.DEAD, low_confidence,
-            f"required move ({required_move_pts:.0f}pts) > {dead_multiple:.0f}x expected "
-            f"({expected_move_pts:.0f}pts), or time to worthless < {low_time_min:.0f}min",
-        )
-
-    # Priority 3: Hope
-    if required_move_pts > expected_move_pts:
-        return BuyerClassification(
-            BuyerState.HOPE, low_confidence,
-            f"required move ({required_move_pts:.0f}pts) > expected move ({expected_move_pts:.0f}pts)",
-        )
-
-    # Priority 4: On plan
-    if ttw < plausible_time_min:
-        return BuyerClassification(
-            BuyerState.DEAD, low_confidence,
-            f"required move is within expected move but only {ttw:.0f}min of plausible time left",
-        )
-
-    return BuyerClassification(
-        BuyerState.ON_PLAN, low_confidence,
-        f"required move ({required_move_pts:.0f}pts) ≤ expected move ({expected_move_pts:.0f}pts)",
-    )
-
-
-@dataclass(frozen=True)
-class SellerClassification:
-    state: SellerState
-    low_confidence: bool
-    reason: str
-
-
-def classify_seller(
-    current_loss: float,          # positive number = loss so far, 0 if profitable
-    max_loss: float,
-    adverse_move_pts: float,      # points against the short until danger (max loss / strike)
-    expected_move_pts: float,
-    time_to_worthless_min: float | None,
-    fear_fraction: float = DEFAULT_FEAR_FRACTION,
-    low_time_min: float = DEFAULT_LOW_TIME_MIN,
-) -> SellerClassification:
-    """
-    NOTE: seller-side 4-state mapping is a proposed default per SPEC.md §4,
-    not fully locked by the product spec — confirm labels/thresholds before
-    shipping. Kept as its own function (not reusing BuyerState) so the two
-    can diverge without contorting one enum.
+    ON_PLAN (Safe)
+      - otherwise: required move inside expected move, SL not burning, time left
     """
     low_confidence = time_to_worthless_min is None
     ttw = time_to_worthless_min if time_to_worthless_min is not None else float("inf")
+    req = abs(required_move_pts) if required_move_pts is not None else None
+    sl = abs(stop_loss) if stop_loss not in (None, 0) else None
 
-    if max_loss > 0 and current_loss >= fear_fraction * max_loss:
-        return SellerClassification(
-            SellerState.NEAR_DANGER, low_confidence,
-            f"current loss (₹{current_loss:.0f}) is ≥{fear_fraction*100:.0f}% of max loss (₹{max_loss:.0f})",
+    if sl is not None and net_now <= -sl:
+        return Classification(
+            PositionState.DEAD, low_confidence,
+            f"net ₹{net_now:.0f} is through stop-loss ₹{sl:.0f}",
         )
 
-    if ttw < low_time_min and adverse_move_pts >= expected_move_pts:
-        return SellerClassification(
-            SellerState.EXPIRING_SAFE, low_confidence,
-            f"theta captured, {adverse_move_pts:.0f}pts of cushion vs {ttw:.0f}min left",
+    if not target_reachable or (req is not None and expected_move_pts > 0 and req > dead_multiple * expected_move_pts):
+        detail = (
+            f"required {req:.0f}pts > {dead_multiple:.0f}x expected {expected_move_pts:.0f}pts"
+            if req is not None else "target unreachable at current IV"
+        )
+        return Classification(PositionState.DEAD, low_confidence, detail)
+
+    if side.upper() == "LONG" and ttw < low_time_min:
+        return Classification(
+            PositionState.DEAD, low_confidence,
+            f"time to worthless {ttw:.0f}min < {low_time_min:.0f}min",
         )
 
-    if adverse_move_pts >= expected_move_pts:
-        return SellerClassification(
-            SellerState.SAFE, low_confidence,
-            f"adverse move to danger ({adverse_move_pts:.0f}pts) ≥ expected move ({expected_move_pts:.0f}pts)",
+    if sl is not None and net_now <= -sl_burn * sl:
+        return Classification(
+            PositionState.AT_RISK, low_confidence,
+            f"net ₹{net_now:.0f} has burned {sl_burn*100:.0f}% of stop-loss ₹{sl:.0f}",
         )
 
-    return SellerClassification(
-        SellerState.AT_RISK, low_confidence,
-        f"adverse move to danger ({adverse_move_pts:.0f}pts) < expected move ({expected_move_pts:.0f}pts)",
+    if req is not None and req > expected_move_pts:
+        return Classification(
+            PositionState.AT_RISK, low_confidence,
+            f"required move {req:.0f}pts > expected move {expected_move_pts:.0f}pts",
+        )
+
+    return Classification(
+        PositionState.ON_PLAN, low_confidence,
+        f"required move {req if req is not None else 0:.0f}pts ≤ expected {expected_move_pts:.0f}pts",
     )
