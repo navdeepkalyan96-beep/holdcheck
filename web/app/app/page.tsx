@@ -18,6 +18,9 @@ type Ticket = {
   oi: { bias: string; reason: string };
   state: string; state_reason: string;
   exit_charges?: Charges;
+  entry_charges?: Charges;
+  mark_price?: number;
+  points?: number;
 };
 type Leg = {
   expiry: string; strike: string; option_type: "CE" | "PE"; side: "LONG" | "SHORT";
@@ -117,10 +120,6 @@ function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
           return <text key={i} x={x} y={H - 8} textAnchor="middle" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{hhmm(d.t)}</text>;
         })}
       </svg>
-      <div className="flex gap-2 justify-end text-[11px]">
-        <button type="button" className="border border-white/20 rounded-full px-2 py-0.5" onClick={() => setSpan((s) => Math.max(12, s - 12))}>+</button>
-        <button type="button" className="border border-white/20 rounded-full px-2 py-0.5" onClick={() => setSpan((s) => Math.min(Math.max(data.length, 12), s + 12))}>-</button>
-      </div>
     </div>
   );
 }
@@ -193,20 +192,35 @@ export default function Home() {
     return () => clearInterval(id);
   }, [loadAll]);
 
-  const gross = tickets.reduce((s, t) => s + Number(t.gross_pnl || 0), 0);
-  const net = tickets.reduce((s, t) => s + Number(t.net_pnl || 0), 0);
-  const has = tickets.length > 0;
   const L = legs[0];
   const q = market.quotes?.[`${L.strike}${L.option_type}`];
-  const mark = q?.open ?? q?.ltp;
-  const call = L.option_type === "CE";
+  const ltp = q?.ltp ?? tickets[0]?.mark_price;
+  const open = q?.open;
+  const entry = Number(L.entry_price);
+  const qty = Number(L.lots || 1) * Number(L.lot_size || 65);
+  const sign = L.side === "SHORT" ? -1 : 1;
+  const hasEntry = Boolean(L.entry_price) && Number.isFinite(entry) && ltp != null;
+  const points = hasEntry ? (Number(ltp) - entry) * sign : null;
+  const grossLocal = points != null ? points * qty : null;
   const t0 = tickets[0];
-  const charges = t0?.exit_charges || {};
-  const chargeRows = Object.entries(charges).filter(([, v]) => typeof v === "number");
+  const feeTotal = (t0?.exit_charges?.total || 0) + (t0?.entry_charges?.total || 0);
+  const netLocal = grossLocal != null ? grossLocal - feeTotal : (t0 ? t0.net_pnl : null);
+  const has = grossLocal != null;
+  const call = L.option_type === "CE";
+  const charges = { ...(t0?.entry_charges || {}), ...(t0?.exit_charges || {}) };
+  const chargeRows = Object.entries({
+    entry_brokerage: t0?.entry_charges?.brokerage,
+    exit_brokerage: t0?.exit_charges?.brokerage,
+    stt: t0?.exit_charges?.stt,
+    exchange: t0?.exit_charges?.exchange_txn,
+    gst: (t0?.entry_charges?.gst || 0) + (t0?.exit_charges?.gst || 0),
+    stamp: t0?.entry_charges?.stamp,
+    total: feeTotal,
+  }).filter(([, v]) => v != null);
 
   function onAnalyze() {
     if (!L.target_net || !L.stop_loss) {
-      setPopup("Enter Target and Stop in rupees \u2014 the money you want to make or lose on the book, not the option premium.");
+      setPopup("Enter Target and Stop in rupees — book P&L, not premium.");
       return;
     }
     setAnalysis(true);
@@ -228,21 +242,22 @@ export default function Home() {
         <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/35">{tickAt || "..."}</span>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(gross) : ""}`}>
+        <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(grossLocal || 0) : ""}`}>
           <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">GROSS</div>
-          <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "\u2014"}</div>
+          <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(grossLocal || 0) }}>{has ? rupee(grossLocal || 0) : "\u2014"}</div>
+          <div className="text-[11px] text-white/40 mt-1 font-[family-name:var(--font-mono)]">{points != null ? `${points > 0 ? "+" : ""}${points.toFixed(2)} pts \u00d7 ${qty}` : "LTP \u2212 entry \u00d7 qty"}</div>
         </div>
-        <div className={`relative group border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(net) : ""}`}>
+        <div className={`relative group border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${netLocal != null ? glow(netLocal) : ""}`}>
           <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">NET TICK</div>
-          <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "\u2014"}</div>
+          <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(netLocal || 0) }}>{netLocal != null ? rupee(netLocal) : "\u2014"}</div>
           <div className="hidden group-hover:block absolute right-3 top-full mt-2 z-20 w-56 rounded-xl border border-white/15 bg-[#12101c] p-3 text-[12px]">
-            <div className="text-white/45 mb-2">Net = gross minus exit charges</div>
-            {chargeRows.length ? chargeRows.map(([k, v]) => (
+            <div className="text-white/45 mb-2">Net = gross \u2212 Angel entry+exit</div>
+            {chargeRows.map(([k, v]) => (
               <div key={k} className="flex justify-between font-[family-name:var(--font-mono)]">
                 <span className="text-white/45">{k.replace(/_/g, " ")}</span>
                 <span>{rupee(Number(v))}</span>
               </div>
-            )) : <p className="text-white/40">Enter a position to see brokerage, STT, exchange, GST, stamp.</p>}
+            ))}
           </div>
         </div>
       </div>
@@ -254,7 +269,8 @@ export default function Home() {
         </section>
         <section className={`border rounded-2xl p-3 ${call ? "panel-call" : "panel-put"}`}>
           <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/45">{call ? "CALL" : "PUT"} {L.strike}</div>
-          <div className="font-[family-name:var(--font-mono)] text-[20px] mb-1">{px(mark)}</div>
+          <div className="font-[family-name:var(--font-mono)] text-[20px]">LTP {px(ltp)}</div>
+          <div className="text-[11px] text-white/45 font-[family-name:var(--font-mono)] mb-1">open {px(open)} \u00b7 bid {px(q?.bid)} \u00b7 ask {px(q?.ask)}</div>
           <AngelChart data={optBars} empty="Select strike" />
         </section>
       </div>
@@ -273,8 +289,8 @@ export default function Home() {
         </Drop>
         <Field label="Lots" value={L.lots} onChange={(v) => setL({ lots: v })} w="w-16" />
         <Field label="Entry" value={L.entry_price} onChange={(v) => setL({ entry_price: v })} hint="Premium you paid or received" />
-        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} hint="Enter target in rupees. This is how much profit you want on the book, not the contract / premium price." />
-        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} hint="Enter stop in rupees. This is how much you are willing to lose on the book, not the contract / premium price." />
+        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} hint="Target in rupees of book P&L, not premium." />
+        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} hint="Stop in rupees of book P&L you can lose, not premium." />
         <button type="button" className="cta-gradient rounded-full px-5 py-2 text-[13px] font-medium" onClick={onAnalyze}>Analyze</button>
       </div>
       {error && <p className="text-[12px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
@@ -284,17 +300,6 @@ export default function Home() {
             {(t0.state || "").replace("_", " ").toUpperCase()}
           </div>
           <p className="text-[14px] text-white/65 leading-relaxed">{t0.state_reason}</p>
-          <div className="text-[13px] space-y-2 font-[family-name:var(--font-mono)]">
-            <div className="flex justify-between"><span className="text-white/40">Theta so far</span><span>{t0.theta_so_far == null ? "\u2014" : rupee(t0.theta_so_far)}</span></div>
-            {Object.entries(t0.points_to_target || {}).map(([k, v]) => (
-              <div key={k} className="flex justify-between">
-                <span className="text-white/40">{k.includes("minus") ? "IV -2%" : k.includes("plus") ? "IV +2%" : "IV unchanged"}</span>
-                <span>{v == null ? "\u2014" : `${v > 0 ? "+" : ""}${Number(v).toFixed(0)} pts`}</span>
-              </div>
-            ))}
-            <div className="flex justify-between"><span className="text-white/40">OI</span><span>{(t0.oi?.bias || "neutral").toUpperCase()}</span></div>
-          </div>
-          <p className="text-[12px] text-white/45">{t0.oi?.reason}</p>
         </section>
       )}
     </main>
