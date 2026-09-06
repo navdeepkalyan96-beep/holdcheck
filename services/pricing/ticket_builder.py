@@ -1,6 +1,4 @@
-"""
-ticket_builder.py — one position record → ticket for the app surface.
-"""
+"""ticket_builder.py — one position record → ticket for the app surface."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +11,7 @@ from state_classifier import classify_long, classify_short
 from oi_bias import classify_oi
 
 IST = timezone(timedelta(hours=5, minutes=30))
-FEE_TABLE = FeeTableVersion(version_label="v1")
+FEE_TABLE = FeeTableVersion(version_label="angel-2026")
 RISK_FREE_RATE = 0.065
 IV_SCENARIOS = (("iv_minus_2pct", 0.98), ("iv_unchanged", 1.00), ("iv_plus_2pct", 1.02))
 
@@ -41,6 +39,19 @@ def _hours_open(pos: dict, now: datetime) -> float | None:
     return None
 
 
+def _px(v):
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    # Angel sometimes sends premium in paise
+    if n >= 5000:
+        n = n / 100.0
+    return n
+
+
 def build_ticket(pos: dict, now: datetime | None = None) -> dict:
     now = now or datetime.now(IST)
 
@@ -52,24 +63,22 @@ def build_ticket(pos: dict, now: datetime | None = None) -> dict:
     position_side = Side.BUY if is_long else Side.SELL
 
     T = _years_to_expiry(pos["expiry"], now)
-    F = float(pos["forward"])
+    F = float(pos["forward"] or 0)
     K = float(pos["strike"])
-    sigma = float(pos["iv_atm"])
+    sigma = float(pos["iv_atm"] or 0.15)
 
-    bid, ask, ltp = pos.get("bid"), pos.get("ask"), pos.get("ltp")
-    mark_ltp = ltp if ltp is not None else (bid if is_long else ask)
-    exit_price = (bid if is_long else ask)
-    no_live_bid = exit_price is None
-    if no_live_bid:
-        exit_price = ltp
+    bid, ask, ltp = _px(pos.get("bid")), _px(pos.get("ask")), _px(pos.get("ltp"))
+    mark = ltp or (bid if is_long else ask) or bid or ask
+    exit_price = (bid if is_long else ask) or ltp or mark
+    no_live_bid = bid is None if is_long else ask is None
 
     entry_price = float(pos["entry_price"])
     sign = 1 if is_long else -1
-    gross_pnl = (float(mark_ltp) - entry_price) * qty * sign if mark_ltp is not None else 0.0
-    net_now = net_if_exited_now(position_side, entry_price, exit_price, qty, FEE_TABLE)
-    exit_charges = transaction_charges(
-        Side.SELL if is_long else Side.BUY, exit_price, qty, FEE_TABLE
-    )
+    points = (float(mark) - entry_price) * sign if mark is not None else 0.0
+    gross_pnl = points * qty
+    net_now = net_if_exited_now(position_side, entry_price, exit_price, qty, FEE_TABLE) if exit_price else 0.0
+    exit_charges = transaction_charges(Side.SELL if is_long else Side.BUY, exit_price or entry_price, qty, FEE_TABLE)
+    entry_charges = transaction_charges(position_side, entry_price, qty, FEE_TABLE)
 
     low_confidence_pricing = T <= 0
     if T > 0:
@@ -89,19 +98,15 @@ def build_ticket(pos: dict, now: datetime | None = None) -> dict:
         low_confidence_pricing = True
 
     hours_open = _hours_open(pos, now)
-    # Longs lose premium to theta; shorts receive it.
     signed_theta_hour = theta_per_hour * (-1 if is_long else 1)
     theta_so_far = None if hours_open is None else round(signed_theta_hour * hours_open, 2)
-
-    expected_move = expected_move_straddle(float(pos["atm_ce_premium"]), float(pos["atm_pe_premium"]))
+    expected_move = expected_move_straddle(float(pos.get("atm_ce_premium") or mark or 1), float(pos.get("atm_pe_premium") or mark or 1))
 
     target_net = pos.get("target_net")
     stop_loss = pos.get("stop_loss")
     if stop_loss is None:
         stop_loss = pos.get("max_loss")
-        if stop_loss is not None and is_long is False:
-            stop_loss = -abs(float(stop_loss))
-        elif stop_loss is not None and is_long:
+        if stop_loss is not None:
             stop_loss = -abs(float(stop_loss))
 
     plan_inferred = target_net is None
@@ -109,11 +114,10 @@ def build_ticket(pos: dict, now: datetime | None = None) -> dict:
         target_net = 0.5 * entry_price * qty * sign
     else:
         target_net = float(target_net)
-
     sl = float(stop_loss) if stop_loss is not None else None
 
-    def exit_charges_fn(px: float) -> float:
-        return transaction_charges(Side.SELL if is_long else Side.BUY, px, qty, FEE_TABLE).total
+    def exit_charges_fn(pxv: float) -> float:
+        return transaction_charges(Side.SELL if is_long else Side.BUY, pxv, qty, FEE_TABLE).total
 
     points_to_target = {}
     if T > 0:
@@ -123,7 +127,7 @@ def build_ticket(pos: dict, now: datetime | None = None) -> dict:
                     target_signed_pnl_after_charges=target_net,
                     entry_price=entry_price, K=K, qty=qty, sign=sign,
                     sigma=max(sigma * iv_mult, 0.001), T_remaining=T, r=RISK_FREE_RATE,
-                    opt_type=opt_type, exit_charges_fn=exit_charges_fn, F_guess=F,
+                    opt_type=opt_type, exit_charges_fn=exit_charges_fn, F_guess=F or K,
                 )
                 points_to_target[name] = round(solved_F - F, 1)
             except ValueError:
@@ -132,17 +136,19 @@ def build_ticket(pos: dict, now: datetime | None = None) -> dict:
         points_to_target = {name: None for name, _ in IV_SCENARIOS}
 
     oi = classify_oi(pos.get("ce_oi_change"), pos.get("pe_oi_change"))
-
     ticket = {
         "instrument": f"{pos['underlying']} {int(K)}{pos['option_type']}",
         "expiry": pos["expiry"],
         "lots": lots,
         "side": "LONG" if is_long else "SHORT",
         "entry_price": entry_price,
+        "mark_price": None if mark is None else round(mark, 2),
+        "points": round(points, 2),
         "gross_pnl": round(gross_pnl, 2),
         "net_pnl": round(net_now, 2),
         "net_if_exited_now": round(net_now, 2),
         "exit_charges": exit_charges.as_dict(),
+        "entry_charges": entry_charges.as_dict(),
         "no_live_bid_flag": no_live_bid,
         "greeks": greeks_out,
         "theta_per_hour": round(signed_theta_hour, 2),
@@ -176,24 +182,10 @@ def build_ticket(pos: dict, now: datetime | None = None) -> dict:
 
     baseline = points_to_target.get("iv_unchanged")
     move = abs(baseline) if baseline is not None else float("inf")
-
     if is_long:
-        classification = classify_long(
-            net_now=net_now,
-            stop_loss=sl,
-            required_move_pts=move,
-            expected_move_pts=expected_move,
-            time_to_worthless_min=ttw,
-        )
+        classification = classify_long(net_now=net_now, stop_loss=sl, required_move_pts=move, expected_move_pts=expected_move, time_to_worthless_min=ttw)
     else:
-        classification = classify_short(
-            net_now=net_now,
-            stop_loss=sl,
-            adverse_move_pts=move,
-            expected_move_pts=expected_move,
-            time_to_worthless_min=ttw,
-        )
-
+        classification = classify_short(net_now=net_now, stop_loss=sl, adverse_move_pts=move, expected_move_pts=expected_move, time_to_worthless_min=ttw)
     ticket["state"] = classification.state.value
     ticket["state_reason"] = classification.reason
     ticket["low_confidence"] = ticket["low_confidence"] or classification.low_confidence
