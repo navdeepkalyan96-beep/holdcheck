@@ -11,7 +11,7 @@ from nse_live import snapshot as nse_snapshot, quote_leg, oi_window
 from angel_live import configured as angel_configured, snapshot as angel_snapshot
 from angel_candles import nifty_candles, option_candles
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.5.0-ui")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.5.1-pnl")
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,11 +109,7 @@ def _market_payload(snap: dict) -> dict:
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "mode": "angel" if angel_configured() else "nse-scrape",
-        "server_time_ist": datetime.now(IST).isoformat(),
-    }
+    return {"status": "ok", "mode": "angel" if angel_configured() else "nse-scrape", "server_time_ist": datetime.now(IST).isoformat()}
 
 
 @app.get("/market/candles")
@@ -172,12 +168,11 @@ def tickets_live(book: LiveBook):
         try:
             hydrated = _hydrate(p.model_dump(), snap)
             t = build_ticket(hydrated)
-            mark = hydrated.get("open") or hydrated.get("ltp")
             t["live"] = {
                 "spot": snap.get("underlying"),
                 "open": hydrated.get("open"),
                 "ltp": hydrated.get("ltp"),
-                "mark": mark,
+                "mark": hydrated.get("ltp") or hydrated.get("open"),
                 "bid": hydrated.get("bid"),
                 "ask": hydrated.get("ask"),
             }
