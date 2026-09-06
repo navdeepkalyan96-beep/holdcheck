@@ -6,12 +6,12 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 type Row = { code: string; label: string; last: number | null; chg: number | null; pct: number | null };
 
+function wsBase() {
+  return API_URL.replace(/^http/, "ws");
+}
+
 function Arrow({ up }: { up: boolean }) {
-  return (
-    <span className="inline-block text-[11px] leading-none" aria-hidden>
-      {up ? "▲" : "▼"}
-    </span>
-  );
+  return <span className="inline-block text-[11px] leading-none">{up ? "▲" : "▼"}</span>;
 }
 
 export default function MarketStrip() {
@@ -19,19 +19,46 @@ export default function MarketStrip() {
 
   useEffect(() => {
     let live = true;
-    const load = () => {
+    let sock: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+
+    const apply = (d: { rows?: Row[] }) => {
+      if (live && Array.isArray(d.rows)) setRows(d.rows);
+    };
+
+    const http = () => {
       fetch(`${API_URL}/market/strip`)
         .then((r) => r.json())
-        .then((d) => {
-          if (live && Array.isArray(d.rows)) setRows(d.rows);
-        })
+        .then(apply)
         .catch(() => {});
     };
-    load();
-    const id = setInterval(load, 30000);
+
+    const connect = () => {
+      try {
+        sock = new WebSocket(`${wsBase()}/ws/tape`);
+        sock.onmessage = (ev) => {
+          try {
+            apply(JSON.parse(ev.data));
+          } catch {
+            /* ignore */
+          }
+        };
+        sock.onerror = () => http();
+        sock.onclose = () => {
+          if (!live) return;
+          retry = setTimeout(connect, 4000);
+        };
+      } catch {
+        http();
+      }
+    };
+
+    http();
+    connect();
     return () => {
       live = false;
-      clearInterval(id);
+      if (retry) clearTimeout(retry);
+      sock?.close();
     };
   }, []);
 
