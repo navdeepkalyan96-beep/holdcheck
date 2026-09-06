@@ -3,9 +3,6 @@
 :root {
   --font-display: "Avenir Next", "Century Gothic", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
-  --hero-left: #07051a;
-  --hero-mid: #1a1578;
-  --hero-right: #2f3dff;
 }
 
 @theme inline {
@@ -13,20 +10,29 @@
   --font-mono: var(--font-mono);
 }
 
-body {
-  font-family: var(--font-display);
-}
+body { font-family: var(--font-display); }
 
 .hero-gradient {
   background:
     radial-gradient(120% 80% at 0% 50%, #05030f 0%, transparent 55%),
     linear-gradient(90deg, #080616 0%, #16128a 48%, #3a48ff 100%);
 }
+.cta-gradient { background: linear-gradient(90deg, #9b6dff 0%, #7b8cff 45%, #5ce6ff 100%); }
+.cta-gradient:hover { filter: brightness(1.08); }
 
-.cta-gradient {
-  background: linear-gradient(90deg, #9b6dff 0%, #7b8cff 45%, #5ce6ff 100%);
+.glow-profit {
+  border-color: #3dff8a !important;
+  box-shadow: 0 0 0 1px rgba(61,255,138,0.35), 0 0 28px rgba(61,255,138,0.28);
 }
-
-.cta-gradient:hover {
-  filter: brightness(1.08);
+.glow-loss {
+  border-color: #ff5c6a !important;
+  box-shadow: 0 0 0 1px rgba(255,92,106,0.35), 0 0 28px rgba(255,92,106,0.28);
+}
+.panel-call {
+  background: linear-gradient(180deg, rgba(40,90,255,0.28) 0%, rgba(10,16,40,0.9) 100%);
+  border-color: rgba(90,140,255,0.45);
+}
+.panel-put {
+  background: linear-gradient(180deg, rgba(255,200,40,0.22) 0%, rgba(28,22,8,0.92) 100%);
+  border-color: rgba(255,210,70,0.45);
 }
