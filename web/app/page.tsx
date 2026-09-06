@@ -28,7 +28,7 @@ function IconFlag() {
 const FLOW = [
   { n: "01", title: "Park the lot", body: "Strike, expiry, side, target & stop in rupees." },
   { n: "02", title: "Market talks", body: "IV, theta, delta, OI update on the live book." },
-  { n: "03", title: "State speaks", body: "Safe · At risk · Dead. You still exit." },
+  { n: "03", title: "State speaks", body: "Safe / At risk / Dead. You still exit." },
 ];
 
 const STATES = [
@@ -116,7 +116,7 @@ export default function LandingPage() {
                   <p className="text-[15px] text-white/55 mt-3 leading-relaxed">{s.body}</p>
                 </div>
                 {i < FLOW.length - 1 && (
-                  <div className="hidden lg:flex items-center justify-center text-[#7FF0C8]/50 text-2xl">→</div>
+                  <div className="hidden lg:flex items-center justify-center text-[#7FF0C8]/50 text-2xl">-></div>
                 )}
               </div>
             ))}
@@ -140,7 +140,8 @@ export default function LandingPage() {
                 <ul className="mt-6 space-y-2">
                   {s.bits.map((b) => (
                     <li key={b} className="text-[14px] text-white/70 flex gap-2">
-                      <span style={{ color: s.color }}—</span> {b}
+                      <span style={{ color: s.color }}>|</span>
+                      {b}
                     </li>
                   ))}
                 </ul>
