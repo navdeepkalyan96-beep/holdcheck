@@ -1,8 +1,10 @@
 """HoldCheck pricing API — Angel One first, NSE scrape fallback."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -13,8 +15,18 @@ from angel_candles import nifty_candles, option_candles
 from iv_study import study as iv_study
 from broker_connect import connect_user, status as broker_status
 from market_strip import tape as market_tape
+from ws_hub import tape_hub, nifty_hub, run_tape_loop, run_nifty_loop
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.8.0-tape")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    tasks = [asyncio.create_task(run_tape_loop()), asyncio.create_task(run_nifty_loop())]
+    yield
+    for t in tasks:
+        t.cancel()
+
+
+app = FastAPI(title="HoldCheck Pricing Service", version="0.9.0-ws", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -120,6 +132,30 @@ def _market_payload(snap: dict) -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": "angel" if angel_configured() else "nse-scrape", "server_time_ist": datetime.now(IST).isoformat()}
+
+
+@app.websocket("/ws/tape")
+async def ws_tape(ws: WebSocket):
+    await tape_hub.join(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        tape_hub.drop(ws)
+    except Exception:
+        tape_hub.drop(ws)
+
+
+@app.websocket("/ws/nifty")
+async def ws_nifty(ws: WebSocket):
+    await nifty_hub.join(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        nifty_hub.drop(ws)
+    except Exception:
+        nifty_hub.drop(ws)
 
 
 @app.get("/market/strip")
