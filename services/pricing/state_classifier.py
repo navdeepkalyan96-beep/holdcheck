@@ -1,11 +1,8 @@
 """
-Three-state classifier used in the v1 app.
+Three-state classifier: Safe (on plan) / At risk / Dead.
 
-  on_plan  (Safe)  — plan is still inside what this expiry is pricing
-  at_risk          — plan is stretched vs expected move or vs SL
-  dead             — plan is not reachable in remaining life / SL is gone
-
-Thresholds are product constants. Tune here only.
+Criteria are numeric only. Labels are descriptions of the book vs the user's
+plan (target + stop), expected move, and remaining life. They are not orders.
 """
 
 from dataclasses import dataclass
@@ -13,14 +10,16 @@ from enum import Enum
 
 
 class PositionState(str, Enum):
-    ON_PLAN = "on_plan"
+    SAFE = "safe"
     AT_RISK = "at_risk"
     DEAD = "dead"
 
 
-DEFAULT_DEAD_MULTIPLE = 2.0
-DEFAULT_LOW_TIME_MIN = 30.0
-DEFAULT_SL_BURN = 0.80
+# Named product thresholds — tune here only.
+DEAD_MOVE_MULTIPLE = 2.0          # required/adverse vs expected
+AT_RISK_MOVE_MULTIPLE = 1.0       # above expected → at risk
+LOW_TIME_MIN = 30.0               # minutes of model life left
+STOP_HIT_BUFFER = 0.0             # net at or through SL → dead
 
 
 @dataclass(frozen=True)
@@ -30,74 +29,86 @@ class Classification:
     reason: str
 
 
-def classify(
-    *,
-    side: str,
+def classify_long(
     net_now: float,
-    target_net: float | None,
     stop_loss: float | None,
-    required_move_pts: float | None,
+    required_move_pts: float,
     expected_move_pts: float,
     time_to_worthless_min: float | None,
-    target_reachable: bool,
-    dead_multiple: float = DEFAULT_DEAD_MULTIPLE,
-    low_time_min: float = DEFAULT_LOW_TIME_MIN,
-    sl_burn: float = DEFAULT_SL_BURN,
 ) -> Classification:
     """
-    Data rules
-    ----------
-    DEAD
-      - target unreachable under IV unchanged, or
-      - |required_move| > dead_multiple * expected_move, or
-      - time_to_worthless < 30 min (longs), or
-      - stop-loss is a positive number and net_now <= -abs(stop_loss)
-        (long: loss at/through SL; short: same, SL is max loss in rupees)
-
-    AT_RISK
-      - |required_move| > expected_move, or
-      - net_now <= -sl_burn * abs(stop_loss) when SL is set
-
-    ON_PLAN (Safe)
-      - otherwise: required move inside expected move, SL not burning, time left
+    Long premium:
+      Dead    — SL hit, or required move > 2× expected, or < 30 min of model life.
+      At risk — required move > expected (plan asks more than the straddle prices).
+      Safe    — required ≤ expected, SL not hit, enough time left.
     """
     low_confidence = time_to_worthless_min is None
     ttw = time_to_worthless_min if time_to_worthless_min is not None else float("inf")
-    req = abs(required_move_pts) if required_move_pts is not None else None
-    sl = abs(stop_loss) if stop_loss not in (None, 0) else None
 
-    if sl is not None and net_now <= -sl:
+    if stop_loss is not None and net_now <= stop_loss:
         return Classification(
             PositionState.DEAD, low_confidence,
-            f"net ₹{net_now:.0f} is through stop-loss ₹{sl:.0f}",
+            f"net now (₹{net_now:.0f}) is at or through stop (₹{stop_loss:.0f})",
         )
 
-    if not target_reachable or (req is not None and expected_move_pts > 0 and req > dead_multiple * expected_move_pts):
-        detail = (
-            f"required {req:.0f}pts > {dead_multiple:.0f}x expected {expected_move_pts:.0f}pts"
-            if req is not None else "target unreachable at current IV"
-        )
-        return Classification(PositionState.DEAD, low_confidence, detail)
-
-    if side.upper() == "LONG" and ttw < low_time_min:
+    if required_move_pts > DEAD_MOVE_MULTIPLE * expected_move_pts or ttw < LOW_TIME_MIN:
         return Classification(
             PositionState.DEAD, low_confidence,
-            f"time to worthless {ttw:.0f}min < {low_time_min:.0f}min",
+            f"required move ({required_move_pts:.0f}pts) > {DEAD_MOVE_MULTIPLE:.0f}× expected "
+            f"({expected_move_pts:.0f}pts), or model life < {LOW_TIME_MIN:.0f}min",
         )
 
-    if sl is not None and net_now <= -sl_burn * sl:
+    if required_move_pts > AT_RISK_MOVE_MULTIPLE * expected_move_pts:
         return Classification(
             PositionState.AT_RISK, low_confidence,
-            f"net ₹{net_now:.0f} has burned {sl_burn*100:.0f}% of stop-loss ₹{sl:.0f}",
-        )
-
-    if req is not None and req > expected_move_pts:
-        return Classification(
-            PositionState.AT_RISK, low_confidence,
-            f"required move {req:.0f}pts > expected move {expected_move_pts:.0f}pts",
+            f"required move ({required_move_pts:.0f}pts) > expected move ({expected_move_pts:.0f}pts)",
         )
 
     return Classification(
-        PositionState.ON_PLAN, low_confidence,
-        f"required move {req if req is not None else 0:.0f}pts ≤ expected {expected_move_pts:.0f}pts",
+        PositionState.SAFE, low_confidence,
+        f"required move ({required_move_pts:.0f}pts) ≤ expected ({expected_move_pts:.0f}pts); stop not hit",
+    )
+
+
+def classify_short(
+    net_now: float,
+    stop_loss: float | None,
+    adverse_move_pts: float,
+    expected_move_pts: float,
+    time_to_worthless_min: float | None,
+) -> Classification:
+    """
+    Short premium:
+      Dead    — SL hit (loss through max loss), or cushion < 0.5× expected with < 30 min left.
+      At risk — adverse move to SL < expected move (a priced-in swing reaches the stop).
+      Safe    — cushion to SL ≥ expected move.
+    """
+    low_confidence = time_to_worthless_min is None
+    ttw = time_to_worthless_min if time_to_worthless_min is not None else float("inf")
+    current_loss = max(-net_now, 0.0)
+
+    if stop_loss is not None:
+        # stop_loss for shorts is a negative net or a positive max-loss budget.
+        sl = stop_loss if stop_loss < 0 else -abs(stop_loss)
+        if net_now <= sl:
+            return Classification(
+                PositionState.DEAD, low_confidence,
+                f"net now (₹{net_now:.0f}) is at or through stop (₹{sl:.0f})",
+            )
+
+    if ttw < LOW_TIME_MIN and adverse_move_pts < 0.5 * expected_move_pts:
+        return Classification(
+            PositionState.DEAD, low_confidence,
+            f"cushion to stop ({adverse_move_pts:.0f}pts) < 0.5× expected with {ttw:.0f}min left",
+        )
+
+    if adverse_move_pts < expected_move_pts:
+        return Classification(
+            PositionState.AT_RISK, low_confidence,
+            f"adverse move to stop ({adverse_move_pts:.0f}pts) < expected ({expected_move_pts:.0f}pts)",
+        )
+
+    return Classification(
+        PositionState.SAFE, low_confidence,
+        f"adverse move to stop ({adverse_move_pts:.0f}pts) ≥ expected ({expected_move_pts:.0f}pts)",
     )
