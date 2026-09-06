@@ -10,12 +10,14 @@ type Market = {
   underlying?: number; expiry?: string; expiries?: string[]; strikes?: number[];
   atm_strike?: number; quotes?: Record<string, Quote>;
 };
+type Charges = Record<string, number>;
 type Ticket = {
   instrument: string; side: string; lots: number; gross_pnl: number; net_pnl: number;
   theta_per_hour: number; theta_so_far: number | null; expected_move_pts: number;
   points_to_target: Record<string, number | null>;
   oi: { bias: string; reason: string };
   state: string; state_reason: string;
+  exit_charges?: Charges;
 };
 type Leg = {
   expiry: string; strike: string; option_type: "CE" | "PE"; side: "LONG" | "SHORT";
@@ -24,7 +26,7 @@ type Leg = {
 
 function rupee(n: number) {
   const sign = n < 0 ? "-" : n > 0 ? "+" : "";
-  return `${sign}\u20b9${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  return sign + "\u20b9" + Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 }
 function px(n?: number | null) {
   return n == null || Number.isNaN(Number(n)) ? "\u2014" : Number(n).toFixed(2);
@@ -45,32 +47,26 @@ function hhmm(t: string) {
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function Drop({
-  label, value, onChange, children, width,
-}: { label: string; value: string; onChange: (v: string) => void; children: React.ReactNode; width?: string }) {
+function Drop({ label, value, onChange, children, width } : {
+  label: string; value: string; onChange: (v: string) => void; children: React.ReactNode; width?: string;
+}) {
   return (
     <label className="inline-flex flex-col gap-1">
       <span className="text-[10px] tracking-[0.14em] uppercase text-white/35 font-[family-name:var(--font-mono)]">{label}</span>
-      <select
-        className={`appearance-none bg-[#0c0a18] border border-white/12 rounded-full pl-3 pr-7 py-1.5 text-[13px] text-white ${width || "min-w-[7.5rem]"}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
+      <select className={`appearance-none bg-[#0c0a18] border border-white/12 rounded-full pl-3 pr-7 py-1.5 text-[13px] text-white ${width || "min-w-[7.5rem]"}`} value={value} onChange={(e) => onChange(e.target.value)}>
         {children}
       </select>
     </label>
   );
 }
 
-function Field({ label, value, onChange, w }: { label: string; value: string; onChange: (v: string) => void; w?: string }) {
+function Field({ label, value, onChange, w, hint } : {
+  label: string; value: string; onChange: (v: string) => void; w?: string; hint?: string;
+}) {
   return (
-    <label className="inline-flex flex-col gap-1">
+    <label className="inline-flex flex-col gap-1" title={hint}>
       <span className="text-[10px] tracking-[0.14em] uppercase text-white/35 font-[family-name:var(--font-mono)]">{label}</span>
-      <input
-        className={`bg-[#0c0a18] border border-white/12 rounded-full px-3 py-1.5 text-[13px] text-white ${w || "w-24"}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <input className={`bg-[#0c0a18] border border-white/12 rounded-full px-3 py-1.5 text-[13px] text-white ${w || "w-24"}`} value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
   );
 }
@@ -79,9 +75,7 @@ function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
   const [span, setSpan] = useState(48);
   const view = useMemo(() => data.slice(-Math.max(12, span)), [data, span]);
   const W = 420, H = 240, left = 52, right = 8, top = 10, bottom = 28;
-  if (!data.length) {
-    return <div className="h-[240px] flex items-center justify-center text-[12px] text-white/40">{empty}</div>;
-  }
+  if (!data.length) return <div className="h-[240px] flex items-center justify-center text-[12px] text-white/40">{empty}</div>;
   const max = Math.max(...view.map((d) => d.h));
   const min = Math.min(...view.map((d) => d.l));
   const rng = max - min || 1;
@@ -99,9 +93,7 @@ function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
           return (
             <g key={i}>
               <line x1={left} x2={W - right} y1={yy} y2={yy} stroke="rgba(255,255,255,0.08)" />
-              <text x={left - 6} y={yy + 3} textAnchor="end" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">
-                {v >= 1000 ? v.toFixed(0) : v.toFixed(2)}
-              </text>
+              <text x={left - 6} y={yy + 3} textAnchor="end" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{v >= 1000 ? v.toFixed(0) : v.toFixed(2)}</text>
             </g>
           );
         })}
@@ -122,11 +114,7 @@ function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
           const d = view[i];
           if (!d) return null;
           const x = left + (i + 0.5) * (plotW / view.length);
-          return (
-            <text key={i} x={x} y={H - 8} textAnchor="middle" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">
-              {hhmm(d.t)}
-            </text>
-          );
+          return <text key={i} x={x} y={H - 8} textAnchor="middle" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{hhmm(d.t)}</text>;
         })}
       </svg>
       <div className="flex gap-2 justify-end text-[11px]">
@@ -147,6 +135,7 @@ export default function Home() {
   const [spotBars, setSpotBars] = useState<Candle[]>([]);
   const [optBars, setOptBars] = useState<Candle[]>([]);
   const [analysis, setAnalysis] = useState(false);
+  const [popup, setPopup] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<string | null>(null);
   const legsRef = useRef(legs);
@@ -212,21 +201,49 @@ export default function Home() {
   const mark = q?.open ?? q?.ltp;
   const call = L.option_type === "CE";
   const t0 = tickets[0];
+  const charges = t0?.exit_charges || {};
+  const chargeRows = Object.entries(charges).filter(([, v]) => typeof v === "number");
+
+  function onAnalyze() {
+    if (!L.target_net || !L.stop_loss) {
+      setPopup("Enter Target and Stop in rupees \u2014 the money you want to make or lose on the book, not the option premium.");
+      return;
+    }
+    setAnalysis(true);
+    loadAll().catch((e) => setError(String(e.message || e)));
+  }
 
   return (
     <main className="flex-1 px-4 pt-16 pb-12 max-w-[1080px] mx-auto w-full">
+      {popup && (
+        <div className="fixed inset-0 z-50 bg-black/55 flex items-center justify-center px-4" onClick={() => setPopup(null)}>
+          <div className="bg-[#12101c] border border-white/15 rounded-2xl p-5 max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[15px] leading-relaxed">{popup}</p>
+            <button type="button" className="mt-4 text-[13px] rounded-full border border-white/20 px-4 py-1.5" onClick={() => setPopup(null)}>OK</button>
+          </div>
+        </div>
+      )}
       <div className="flex items-baseline justify-between mb-4">
         <h1 className="text-[18px] font-medium tracking-tight">Live book</h1>
-        <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/35">{tickAt || "\u2026"}</span>
+        <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/35">{tickAt || "..."}</span>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(gross) : ""}`}>
           <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">GROSS</div>
           <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "\u2014"}</div>
         </div>
-        <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(net) : ""`}>
+        <div className={`relative group border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(net) : ""}`}>
           <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">NET TICK</div>
           <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "\u2014"}</div>
+          <div className="hidden group-hover:block absolute right-3 top-full mt-2 z-20 w-56 rounded-xl border border-white/15 bg-[#12101c] p-3 text-[12px]">
+            <div className="text-white/45 mb-2">Net = gross minus exit charges</div>
+            {chargeRows.length ? chargeRows.map(([k, v]) => (
+              <div key={k} className="flex justify-between font-[family-name:var(--font-mono)]">
+                <span className="text-white/45">{k.replace(/_/g, " ")}</span>
+                <span>{rupee(Number(v))}</span>
+              </div>
+            )) : <p className="text-white/40">Enter a position to see brokerage, STT, exchange, GST, stamp.</p>}
+          </div>
         </div>
       </div>
       <div className="grid md:grid-cols-2 gap-3 mb-5">
@@ -255,10 +272,10 @@ export default function Home() {
           <option>LONG</option><option>SHORT</option>
         </Drop>
         <Field label="Lots" value={L.lots} onChange={(v) => setL({ lots: v })} w="w-16" />
-        <Field label="Entry" value={L.entry_price} onChange={(v) => setL({ entry_price: v })} />
-        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} />
-        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} />
-        <button type="button" className="cta-gradient rounded-full px-5 py-2 text-[13px] font-medium" onClick={() => { setAnalysis(true); loadAll().catch((e) => setError(String(e.message || e))); }}>Analyze</button>
+        <Field label="Entry" value={L.entry_price} onChange={(v) => setL({ entry_price: v })} hint="Premium you paid or received" />
+        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} hint="Enter target in rupees. This is how much profit you want on the book, not the contract / premium price." />
+        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} hint="Enter stop in rupees. This is how much you are willing to lose on the book, not the contract / premium price." />
+        <button type="button" className="cta-gradient rounded-full px-5 py-2 text-[13px] font-medium" onClick={onAnalyze}>Analyze</button>
       </div>
       {error && <p className="text-[12px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
       {analysis && t0 && (
