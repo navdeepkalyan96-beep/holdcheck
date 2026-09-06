@@ -1,17 +1,15 @@
-"""HoldCheck pricing API — CSV tickets + live NSE chain book."""
+"""HoldCheck pricing API — live NSE chain book."""
 
-import csv
-import io
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ticket_builder import build_ticket, IST
 from nse_live import snapshot, quote_leg, oi_window
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.3.0-live")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.3.1-live")
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,17 +50,8 @@ class LiveBook(BaseModel):
     positions: list[Position]
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "mode": "live", "server_time_ist": datetime.now(IST).isoformat()}
-
-
-@app.get("/market/nifty")
-def market_nifty(expiry: str | None = None):
-    try:
-        snap = snapshot("NIFTY", expiry)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"NSE chain unavailable: {e}")
+def _market_payload(snap: dict) -> dict:
+    strikes = sorted({int(r["strike"]) for r in snap["rows"]})
     return {
         "symbol": snap["symbol"],
         "underlying": snap["underlying"],
@@ -74,8 +63,22 @@ def market_nifty(expiry: str | None = None):
         "atm_pe_premium": snap["atm_pe_premium"],
         "iv_atm": snap["iv_atm"],
         "asof": snap["asof"],
-        "strikes": len(snap["rows"]),
+        "strikes": strikes,
     }
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "mode": "live", "server_time_ist": datetime.now(IST).isoformat()}
+
+
+@app.get("/market/nifty")
+def market_nifty(expiry: str | None = None):
+    try:
+        snap = snapshot("NIFTY", expiry)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"NSE chain unavailable: {e}")
+    return _market_payload(snap)
 
 
 def _hydrate(pos: dict, snap: dict) -> dict:
@@ -112,87 +115,5 @@ def tickets_live(book: LiveBook):
             tickets.append(build_ticket(_hydrate(p.model_dump(), snap)))
         except Exception as e:
             errors.append({"row": i, "error": str(e)})
-    return {
-        "market": {
-            "underlying": snap["underlying"],
-            "expiry": snap["expiry"],
-            "atm_strike": snap["atm_strike"],
-            "iv_atm": snap["iv_atm"],
-            "asof": snap["asof"],
-        },
-        "tickets": tickets,
-        "errors": errors,
-    }
-
-
-@app.post("/tickets/position")
-def ticket_for_position(pos: Position):
-    try:
-        data = pos.model_dump()
-        if data.get("iv_atm") is None:
-            snap = snapshot(data.get("underlying") or "NIFTY", data.get("expiry"))
-            data = _hydrate(data, snap)
-        if data.get("stop_loss") is None and data.get("max_loss") is not None:
-            data["stop_loss"] = data["max_loss"]
-        return build_ticket(data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not compute ticket: {e}")
-
-
-def _f(row, key):
-    raw = row.get(key)
-    if raw is None or str(raw).strip() == "":
-        return None
-    return float(raw)
-
-
-@app.post("/tickets/csv")
-async def tickets_from_csv(file: UploadFile = File(...)):
-    if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Upload a .csv file")
-    raw = (await file.read()).decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(raw))
-    tickets, errors = [], []
-    live_needed = False
-    rows = list(reader)
-    fieldnames = set(reader.fieldnames or [])
-    if not {"iv_atm", "atm_ce_premium", "atm_pe_premium", "forward"}.issubset(fieldnames):
-        live_needed = True
-    snap = None
-    if live_needed:
-        try:
-            first_exp = rows[0]["expiry"] if rows else None
-            snap = snapshot("NIFTY", first_exp)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Need chain fields or live NSE: {e}")
-
-    for i, row in enumerate(rows, start=2):
-        try:
-            pos = {
-                "underlying": row.get("underlying") or "NIFTY",
-                "expiry": row["expiry"],
-                "strike": float(row["strike"]),
-                "option_type": row["option_type"].strip().upper(),
-                "lot_size": int(row.get("lot_size") or 65),
-                "side": row["side"].strip().upper(),
-                "lots": int(row["lots"]),
-                "entry_price": float(row["entry_price"]),
-                "ltp": _f(row, "ltp"),
-                "bid": _f(row, "bid"),
-                "ask": _f(row, "ask"),
-                "iv_atm": _f(row, "iv_atm"),
-                "atm_ce_premium": _f(row, "atm_ce_premium"),
-                "atm_pe_premium": _f(row, "atm_pe_premium"),
-                "forward": _f(row, "forward"),
-                "target_net": _f(row, "target_net"),
-                "stop_loss": _f(row, "stop_loss") if row.get("stop_loss") not in (None, "") else _f(row, "max_loss"),
-                "hours_open": _f(row, "hours_open"),
-                "ce_oi_change": _f(row, "ce_oi_change"),
-                "pe_oi_change": _f(row, "pe_oi_change"),
-            }
-            if snap is not None:
-                pos = _hydrate(pos, snap)
-            tickets.append(build_ticket(pos))
-        except Exception as e:
-            errors.append({"row": i, "error": str(e)})
-    return {"tickets": tickets, "errors": errors}
+    payload = _market_payload(snap)
+    return {"market": payload, "tickets": tickets, "errors": errors}
