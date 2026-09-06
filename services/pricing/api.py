@@ -12,8 +12,9 @@ from angel_live import configured as angel_configured, snapshot as angel_snapsho
 from angel_candles import nifty_candles, option_candles
 from iv_study import study as iv_study
 from broker_connect import connect_user, status as broker_status
+from market_strip import tape as market_tape
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.7.0-auth")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.8.0-tape")
 
 app.add_middleware(
     CORSMiddleware,
@@ -119,6 +120,14 @@ def _market_payload(snap: dict) -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": "angel" if angel_configured() else "nse-scrape", "server_time_ist": datetime.now(IST).isoformat()}
+
+
+@app.get("/market/strip")
+def market_strip():
+    try:
+        return market_tape()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/broker/status")
