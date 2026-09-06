@@ -24,10 +24,10 @@ type Leg = {
 
 function rupee(n: number) {
   const sign = n < 0 ? "-" : n > 0 ? "+" : "";
-  return `${sign}₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  return `${sign}\u20b9${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 function px(n?: number | null) {
-  return n == null || Number.isNaN(Number(n)) ? "—" : Number(n).toFixed(2);
+  return n == null || Number.isNaN(Number(n)) ? "\u2014" : Number(n).toFixed(2);
 }
 function pnlColor(n: number) {
   if (n > 0) return "#7FC49A";
@@ -43,6 +43,36 @@ function hhmm(t: string) {
   const d = new Date(t);
   if (Number.isNaN(d.getTime())) return String(t).slice(11, 16);
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function Drop({
+  label, value, onChange, children, width,
+}: { label: string; value: string; onChange: (v: string) => void; children: React.ReactNode; width?: string }) {
+  return (
+    <label className="inline-flex flex-col gap-1">
+      <span className="text-[10px] tracking-[0.14em] uppercase text-white/35 font-[family-name:var(--font-mono)]">{label}</span>
+      <select
+        className={`appearance-none bg-[#0c0a18] border border-white/12 rounded-full pl-3 pr-7 py-1.5 text-[13px] text-white ${width || "min-w-[7.5rem]"}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
+function Field({ label, value, onChange, w }: { label: string; value: string; onChange: (v: string) => void; w?: string }) {
+  return (
+    <label className="inline-flex flex-col gap-1">
+      <span className="text-[10px] tracking-[0.14em] uppercase text-white/35 font-[family-name:var(--font-mono)]">{label}</span>
+      <input
+        className={`bg-[#0c0a18] border border-white/12 rounded-full px-3 py-1.5 text-[13px] text-white ${w || "w-24"}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
 }
 
 function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
@@ -100,8 +130,8 @@ function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
         })}
       </svg>
       <div className="flex gap-2 justify-end text-[11px]">
-        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.max(12, s - 12))}>zoom +</button>
-        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.min(Math.max(data.length, 12), s + 12))}>zoom −</button>
+        <button type="button" className="border border-white/20 rounded-full px-2 py-0.5" onClick={() => setSpan((s) => Math.max(12, s - 12))}>+</button>
+        <button type="button" className="border border-white/20 rounded-full px-2 py-0.5" onClick={() => setSpan((s) => Math.min(Math.max(data.length, 12), s + 12))}>-</button>
       </div>
     </div>
   );
@@ -121,6 +151,7 @@ export default function Home() {
   const [tickAt, setTickAt] = useState<string | null>(null);
   const legsRef = useRef(legs);
   legsRef.current = legs;
+  const setL = (patch: Partial<Leg>) => setLegs([{ ...legs[0], ...patch }]);
 
   const loadAll = useCallback(async () => {
     const L = legsRef.current[0];
@@ -181,97 +212,72 @@ export default function Home() {
   const mark = q?.open ?? q?.ltp;
   const call = L.option_type === "CE";
   const t0 = tickets[0];
-  const netGlow = has ? glow(net) : "";
-  const grossGlow = has ? glow(gross) : "";
 
   return (
-    <main className="flex-1 px-3 pt-16 pb-10 max-w-[1100px] mx-auto w-full">
-      <div className="flex items-center justify-between mb-3">
-        <h1 className="text-[20px] font-medium">Live book</h1>
-        <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">{tickAt ? `TICK ${tickAt}` : "connecting"} · 3s</span>
+    <main className="flex-1 px-4 pt-16 pb-12 max-w-[1080px] mx-auto w-full">
+      <div className="flex items-baseline justify-between mb-4">
+        <h1 className="text-[18px] font-medium tracking-tight">Live book</h1>
+        <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/35">{tickAt || "\u2026"}</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${grossGlow}`}>
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
-          <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "—"}</div>
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(gross) : ""}`}>
+          <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">GROSS</div>
+          <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "\u2014"}</div>
         </div>
-        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${netGlow}`}>
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
-          <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "—"}</div>
+        <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(net) : ""`}>
+          <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">NET TICK</div>
+          <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "\u2014"}</div>
         </div>
       </div>
-      <div className="grid md:grid-cols-2 gap-3 mb-4">
-        <section className="border border-white/10 rounded-xl p-3 bg-white/[0.03]">
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT · Angel 5m</div>
-          <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">{market.underlying ? market.underlying.toFixed(2) : "—"}</div>
-          <AngelChart data={spotBars} empty="no Nifty candles (Sunday / Angel hist)" />
+      <div className="grid md:grid-cols-2 gap-3 mb-5">
+        <section className="border border-white/10 rounded-2xl p-3 bg-white/[0.03]">
+          <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/35">NIFTY SPOT</div>
+          <div className="font-[family-name:var(--font-mono)] text-[20px] mb-1">{market.underlying ? market.underlying.toFixed(2) : "\u2014"}</div>
+          <AngelChart data={spotBars} empty="Angel candles after open" />
         </section>
-        <section className={`border rounded-xl p-3 ${call ? "panel-call" : "panel-put"}`}>
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/50">{call ? "CALL" : "PUT"} · {L.strike || "strike"} · Angel 5m</div>
-          <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">mark {px(mark)} <span className="text-[12px] text-white/50">open {px(q?.open)} · ltp {px(q?.ltp)}</span></div>
-          <AngelChart data={optBars} empty="pick expiry + strike — weekend may be empty" />
+        <section className={`border rounded-2xl p-3 ${call ? "panel-call" : "panel-put"}`}>
+          <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/45">{call ? "CALL" : "PUT"} {L.strike}</div>
+          <div className="font-[family-name:var(--font-mono)] text-[20px] mb-1">{px(mark)}</div>
+          <AngelChart data={optBars} empty="Select strike" />
         </section>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-white/10 rounded-xl p-3 mb-3">
-        <label className="text-[11px] text-white/40">Expiry
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.expiry} onChange={(e) => setLegs([{ ...L, expiry: e.target.value }])}>
-            {(market.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
-          </select>
-        </label>
-        <label className="text-[11px] text-white/40">Strike
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.strike} onChange={(e) => setLegs([{ ...L, strike: e.target.value }])}>
-            {(market.strikes || []).filter((k) => k > 1000 && k < 100000).map((k) => <option key={k} value={String(k)}>{k}</option>)}
-          </select>
-        </label>
-        <label className="text-[11px] text-white/40">Type
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.option_type} onChange={(e) => setLegs([{ ...L, option_type: e.target.value as "CE" | "PE" }])}>
-            <option>CE</option><option>PE</option>
-          </select>
-        </label>
-        <label className="text-[11px] text-white/40">Side
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.side} onChange={(e) => setLegs([{ ...L, side: e.target.value as "LONG" | "SHORT" }])}>
-            <option>LONG</option><option>SHORT</option>
-          </select>
-        </label>
-        <label className="text-[11px] text-white/40">Lots
-          <input className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.lots} onChange={(e) => setLegs([{ ...L, lots: e.target.value }])} />
-        </label>
-        <label className="text-[11px] text-white/40">Entry
-          <input className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.entry_price} onChange={(e) => setLegs([{ ...L, entry_price: e.target.value }])} />
-        </label>
-        <label className="text-[11px] text-white/40">Target ₹
-          <input className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.target_net} onChange={(e) => setLegs([{ ...L, target_net: e.target.value }])} />
-        </label>
-        <label className="text-[11px] text-white/40">Stop ₹
-          <input className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.stop_loss} onChange={(e) => setLegs([{ ...L, stop_loss: e.target.value }])} />
-        </label>
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-3 mb-4">
+        <Drop label="Expiry" value={L.expiry} onChange={(v) => setL({ expiry: v })} width="min-w-[8.5rem]">
+          {(market.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
+        </Drop>
+        <Drop label="Strike" value={L.strike} onChange={(v) => setL({ strike: v })}>
+          {(market.strikes || []).filter((k) => k > 1000 && k < 100000).map((k) => <option key={k} value={String(k)}>{k}</option>)}
+        </Drop>
+        <Drop label="Type" value={L.option_type} onChange={(v) => setL({ option_type: v as "CE" | "PE" })} width="min-w-[4.5rem]">
+          <option>CE</option><option>PE</option>
+        </Drop>
+        <Drop label="Side" value={L.side} onChange={(v) => setL({ side: v as "LONG" | "SHORT" })} width="min-w-[5.5rem]">
+          <option>LONG</option><option>SHORT</option>
+        </Drop>
+        <Field label="Lots" value={L.lots} onChange={(v) => setL({ lots: v })} w="w-16" />
+        <Field label="Entry" value={L.entry_price} onChange={(v) => setL({ entry_price: v })} />
+        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} />
+        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} />
+        <button type="button" className="cta-gradient rounded-full px-5 py-2 text-[13px] font-medium" onClick={() => { setAnalysis(true); loadAll().catch((e) => setError(String(e.message || e))); }}>Analyze</button>
       </div>
-      <button type="button" className="cta-gradient w-full rounded-xl py-4 text-[18px] font-medium mb-4" onClick={() => { setAnalysis(true); loadAll().catch((e) => setError(String(e.message || e))); }}>Analyze</button>
-      {error && <p className="text-[13px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
+      {error && <p className="text-[12px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
       {analysis && t0 && (
-        <section className="border border-white/10 rounded-xl p-5 bg-white/[0.03] space-y-4">
-          <div className="text-center font-[family-name:var(--font-mono)] text-[42px] tracking-wide" style={{ color: t0.state === "dead" ? "#C77A6E" : t0.state === "safe" || t0.state === "on_plan" ? "#7FC49A" : "#D6A25C" }}>
+        <section className="border border-white/10 rounded-2xl p-5 bg-white/[0.03] space-y-4 max-w-[560px]">
+          <div className="font-[family-name:var(--font-mono)] text-[32px] tracking-wide" style={{ color: t0.state === "dead" ? "#C77A6E" : t0.state === "safe" || t0.state === "on_plan" ? "#7FC49A" : "#D6A25C" }}>
             {(t0.state || "").replace("_", " ").toUpperCase()}
           </div>
-          <p className="text-center text-white/70">{t0.state_reason}</p>
-          <div>
-            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">MONEY TO THETA SO FAR</div>
-            <div className="text-[20px] font-[family-name:var(--font-mono)]">{t0.theta_so_far == null ? "—" : rupee(t0.theta_so_far)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">REQUIRED MOVE TO TARGET</div>
+          <p className="text-[14px] text-white/65 leading-relaxed">{t0.state_reason}</p>
+          <div className="text-[13px] space-y-2 font-[family-name:var(--font-mono)]">
+            <div className="flex justify-between"><span className="text-white/40">Theta so far</span><span>{t0.theta_so_far == null ? "\u2014" : rupee(t0.theta_so_far)}</span></div>
             {Object.entries(t0.points_to_target || {}).map(([k, v]) => (
-              <div key={k} className="flex justify-between font-[family-name:var(--font-mono)] text-[14px]">
-                <span className="text-white/45">{k.includes("minus") ? "IV −2%" : k.includes("plus") ? "IV +2%" : "IV unchanged"}</span>
-                <span>{v == null ? "unreachable" : `${v > 0 ? "+" : ""}${Number(v).toFixed(0)} pts`}</span>
+              <div key={k} className="flex justify-between">
+                <span className="text-white/40">{k.includes("minus") ? "IV -2%" : k.includes("plus") ? "IV +2%" : "IV unchanged"}</span>
+                <span>{v == null ? "\u2014" : `${v > 0 ? "+" : ""}${Number(v).toFixed(0)} pts`}</span>
               </div>
             ))}
+            <div className="flex justify-between"><span className="text-white/40">OI</span><span>{(t0.oi?.bias || "neutral").toUpperCase()}</span></div>
           </div>
-          <div>
-            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">OI WINDOW</div>
-            <div className="text-[18px]">{(t0.oi?.bias || "neutral").toUpperCase()}</div>
-            <p className="text-[13px] text-white/55">{t0.oi?.reason}</p>
-          </div>
+          <p className="text-[12px] text-white/45">{t0.oi?.reason}</p>
         </section>
       )}
     </main>
