@@ -26,7 +26,7 @@ function IconFlag() {
 }
 
 const FLOW = [
-  { n: "01", title: "Park the lot", body: "Strike, expiry, side, target & stop in rupees." },
+  { n: "01", title: "Park the lot", body: "Strike, expiry, side, target and stop in rupees." },
   { n: "02", title: "Market talks", body: "IV, theta, delta, OI update on the live book." },
   { n: "03", title: "State speaks", body: "Safe / At risk / Dead. You still exit." },
 ];
@@ -105,19 +105,14 @@ export default function LandingPage() {
         <section id="how-it-works" className="w-full px-8 sm:px-12 lg:px-20 pt-28">
           <p className="font-[family-name:var(--font-mono)] text-[11px] tracking-[0.18em] uppercase text-white/35 mb-4">The loop</p>
           <h2 className="text-[32px] sm:text-[44px] leading-tight font-medium mb-12">How you manage the trade</h2>
-          <div className="grid lg:grid-cols-[1fr_40px_1fr_40px_1fr] items-stretch gap-y-8">
-            {FLOW.map((s, i) => (
-              <div key={s.n} className="contents">
-                <div className="rounded-3xl border border-white/10 p-8 bg-[#0c0a18]">
-                  <div className="w-12 h-12 rounded-full border border-[#7FF0C8]/40 text-[#7FF0C8] font-[family-name:var(--font-mono)] text-[14px] flex items-center justify-center">
-                    {s.n}
-                  </div>
-                  <h3 className="text-[22px] font-medium mt-5">{s.title}</h3>
-                  <p className="text-[15px] text-white/55 mt-3 leading-relaxed">{s.body}</p>
+          <div className="grid lg:grid-cols-3 gap-6">
+            {FLOW.map((s) => (
+              <div key={s.n} className="rounded-3xl border border-white/10 p-8 bg-[#0c0a18]">
+                <div className="w-12 h-12 rounded-full border border-[#7FF0C8]/40 text-[#7FF0C8] font-[family-name:var(--font-mono)] text-[14px] flex items-center justify-center">
+                  {s.n}
                 </div>
-                {i < FLOW.length - 1 && (
-                  <div className="hidden lg:flex items-center justify-center text-[#7FF0C8]/50 text-2xl">-></div>
-                )}
+                <h3 className="text-[22px] font-medium mt-5">{s.title}</h3>
+                <p className="text-[15px] text-white/55 mt-3 leading-relaxed">{s.body}</p>
               </div>
             ))}
           </div>
