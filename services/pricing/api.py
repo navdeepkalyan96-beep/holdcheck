@@ -11,8 +11,9 @@ from nse_live import snapshot as nse_snapshot, quote_leg, oi_window
 from angel_live import configured as angel_configured, snapshot as angel_snapshot
 from angel_candles import nifty_candles, option_candles
 from iv_study import study as iv_study
+from broker_connect import connect_user, status as broker_status
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.6.0-iv")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.7.0-auth")
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +52,13 @@ class LiveBook(BaseModel):
     symbol: str = "NIFTY"
     expiry: str | None = None
     positions: list[Position]
+
+
+class BrokerConnect(BaseModel):
+    api_key: str
+    client_code: str
+    pin: str
+    totp: str
 
 
 def _snap(expiry: str | None = None) -> dict:
@@ -111,6 +119,19 @@ def _market_payload(snap: dict) -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok", "mode": "angel" if angel_configured() else "nse-scrape", "server_time_ist": datetime.now(IST).isoformat()}
+
+
+@app.get("/broker/status")
+def broker_status_ep():
+    return broker_status()
+
+
+@app.post("/broker/connect")
+def broker_connect(body: BrokerConnect):
+    try:
+        return connect_user(body.api_key, body.client_code, body.pin, body.totp)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
 
 @app.get("/market/candles")
