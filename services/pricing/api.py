@@ -10,7 +10,7 @@ from ticket_builder import build_ticket, IST
 from nse_live import snapshot as nse_snapshot, quote_leg, oi_window
 from angel_live import configured as angel_configured, snapshot as angel_snapshot
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.4.0-angel")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.4.1-angel")
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,20 +65,43 @@ def _snap(expiry: str | None = None) -> dict:
     raise RuntimeError(" | ".join(errors) or "no market source")
 
 
+def _norm_strike(k: float) -> int:
+    if k >= 100000:
+        k = k / 100.0
+    return int(round(k))
+
+
 def _market_payload(snap: dict) -> dict:
-    strikes = sorted({int(r["strike"]) for r in snap["rows"]})
+    quotes = {}
+    strikes = set()
+    for r in snap["rows"]:
+        k = _norm_strike(float(r["strike"]))
+        strikes.add(k)
+        for side in ("CE", "PE"):
+            q = r.get(side)
+            if q:
+                quotes[f"{k}{side}"] = {
+                    "ltp": q.get("ltp"),
+                    "open": q.get("open"),
+                    "bid": q.get("bid"),
+                    "ask": q.get("ask"),
+                }
+    atm = snap.get("atm_strike")
+    if atm is not None:
+        atm = _norm_strike(float(atm))
     return {
         "symbol": snap["symbol"],
         "underlying": snap["underlying"],
         "forward": snap["forward"],
         "expiry": snap["expiry"],
         "expiries": snap["expiries"],
-        "atm_strike": snap["atm_strike"],
+        "atm_strike": atm,
         "atm_ce_premium": snap["atm_ce_premium"],
         "atm_pe_premium": snap["atm_pe_premium"],
         "iv_atm": snap["iv_atm"],
         "asof": snap["asof"],
-        "strikes": strikes,
+        "strikes": sorted(strikes),
+        "quotes": quotes,
         "source": snap.get("source") or "nse",
     }
 
@@ -104,11 +127,15 @@ def market_nifty(expiry: str | None = None):
 def _hydrate(pos: dict, snap: dict) -> dict:
     q = quote_leg(snap, float(pos["strike"]), pos["option_type"])
     if not q:
+        # try paise-scaled strike match
+        q = quote_leg(snap, float(pos["strike"]) * 100, pos["option_type"]) or quote_leg(snap, float(pos["strike"]) / 100, pos["option_type"])
+    if not q:
         raise ValueError(f"No quote for {pos['strike']} {pos['option_type']} {snap.get('expiry')}")
     ce_chg, pe_chg = oi_window(snap, float(pos["strike"]), n=5)
     pos["underlying"] = snap["symbol"]
     pos["expiry"] = snap["expiry"] or pos["expiry"]
     pos["ltp"] = q.get("ltp")
+    pos["open"] = q.get("open")
     pos["bid"] = q.get("bid")
     pos["ask"] = q.get("ask")
     pos["iv_atm"] = snap.get("iv_atm") or 0.15
@@ -131,7 +158,18 @@ def tickets_live(book: LiveBook):
     tickets, errors = [], []
     for i, p in enumerate(book.positions):
         try:
-            tickets.append(build_ticket(_hydrate(p.model_dump(), snap)))
+            hydrated = _hydrate(p.model_dump(), snap)
+            t = build_ticket(hydrated)
+            mark = hydrated.get("open") or hydrated.get("ltp")
+            t["live"] = {
+                "spot": snap.get("underlying"),
+                "open": hydrated.get("open"),
+                "ltp": hydrated.get("ltp"),
+                "mark": mark,
+                "bid": hydrated.get("bid"),
+                "ask": hydrated.get("ask"),
+            }
+            tickets.append(t)
         except Exception as e:
             errors.append({"row": i, "error": str(e)})
     return {"market": _market_payload(snap), "tickets": tickets, "errors": errors}
