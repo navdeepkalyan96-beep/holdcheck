@@ -4,6 +4,30 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function upcomingTuesdays(n = 10): string[] {
+  const out: string[] = [];
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  for (let i = 0; i < 80 && out.length < n; i++) {
+    if (d.getDay() === 2) out.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+function strikeLadder(center = 24800, span = 2000, step = 50): number[] {
+  const s: number[] = [];
+  for (let k = center - span; k <= center + span; k += step) s.push(k);
+  return s;
+}
+
+const FALLBACK: Market = {
+  expiries: upcomingTuesdays(),
+  strikes: strikeLadder(),
+  atm_strike: 24800,
+  expiry: upcomingTuesdays()[0],
+};
+
 type Ticket = {
   instrument: string;
   expiry: string;
@@ -48,8 +72,8 @@ type Leg = {
 };
 
 const emptyLeg = (): Leg => ({
-  expiry: "",
-  strike: "",
+  expiry: FALLBACK.expiry || "",
+  strike: FALLBACK.atm_strike != null ? String(FALLBACK.atm_strike) : "",
   option_type: "CE",
   side: "LONG",
   lots: "1",
@@ -150,26 +174,6 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
               <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.net_pnl) }}>{rupee(ticket.net_pnl)}</div>
             </div>
           </div>
-          <div>
-            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">THETA SO FAR</div>
-            <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.theta_so_far ?? 0) }}>
-              {ticket.theta_so_far == null ? "—" : rupee(ticket.theta_so_far)} · {rupee(ticket.theta_per_hour)}/h
-            </div>
-          </div>
-          <div>
-            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">POINTS TO TARGET</div>
-            {Object.entries(ticket.points_to_target || {}).map(([k, v]) => (
-              <div key={k} className="flex justify-between font-[family-name:var(--font-mono)] text-[12px]">
-                <span className="text-white/45">{IV_LABEL[k] ?? k}</span>
-                <span>{v == null ? "unreachable" : `${v > 0 ? "+" : ""}${v.toFixed(0)} pts`}</span>
-              </div>
-            ))}
-          </div>
-          <div>
-            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">OI WINDOW</div>
-            <div style={{ color: oiColor }}>{(ticket.oi.bias || "neutral").toUpperCase()}</div>
-            <p className="text-[12px] text-white/45">{ticket.oi.reason}</p>
-          </div>
         </div>
       )}
     </div>
@@ -179,7 +183,7 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
 export default function Home() {
   const [legs, setLegs] = useState<Leg[]>([emptyLeg()]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [market, setMarket] = useState<Market | null>(null);
+  const [market, setMarket] = useState<Market>(FALLBACK);
   const [live, setLive] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -188,31 +192,38 @@ export default function Home() {
   legsRef.current = legs;
 
   const applyMarket = useCallback((m: Market, seedLeg: boolean) => {
-    setMarket(m);
+    const merged: Market = {
+      ...FALLBACK,
+      ...m,
+      expiries: (m.expiries && m.expiries.length ? m.expiries : FALLBACK.expiries),
+      strikes: (Array.isArray(m.strikes) && m.strikes.length > 4 ? m.strikes : FALLBACK.strikes),
+    };
+    setMarket(merged);
     if (!seedLeg) return;
-    const expiry = m.expiry || "";
-    const strike = m.atm_strike != null ? String(m.atm_strike) : "";
-    setLegs((prev) => prev.map((l, i) => {
-      if (i !== 0) return l;
-      return {
-        ...l,
-        expiry: l.expiry || expiry,
-        strike: l.strike || strike,
-      };
-    }));
+    const expiry = merged.expiry || merged.expiries?.[0] || "";
+    const strike = merged.atm_strike != null ? String(merged.atm_strike) : String(merged.strikes?.[Math.floor((merged.strikes?.length || 1) / 2)] || "");
+    setLegs((prev) => prev.map((l, i) => (i === 0 ? { ...l, expiry: l.expiry || expiry, strike: l.strike || strike } : l)));
   }, []);
 
   const loadMarket = useCallback(async (expiry?: string, seed = false) => {
     const url = expiry ? `${API_URL}/market/nifty?expiry=${encodeURIComponent(expiry)}` : `${API_URL}/market/nifty`;
-    const r = await fetch(url);
-    const m = await r.json();
-    if (!r.ok) throw new Error(typeof m.detail === "string" ? m.detail : "market failed");
-    applyMarket(m, seed);
-    return m as Market;
+    try {
+      const r = await fetch(url);
+      const m = await r.json();
+      if (!r.ok) throw new Error(typeof m.detail === "string" ? m.detail : `HTTP ${r.status}`);
+      applyMarket(m, seed);
+      return m as Market;
+    } catch (e) {
+      applyMarket(FALLBACK, seed);
+      setError(
+        `Chain list using local Nifty ladder. Redeploy pricing on Render from GitHub main so /market/nifty exists. (${e instanceof Error ? e.message : "fail"})`,
+      );
+      return FALLBACK;
+    }
   }, [applyMarket]);
 
   useEffect(() => {
-    loadMarket(undefined, true).catch((e) => setError(String(e.message || e)));
+    loadMarket(undefined, true);
   }, [loadMarket]);
 
   const refresh = useCallback(async () => {
@@ -248,7 +259,7 @@ export default function Home() {
     } catch (e) {
       setError(
         (e instanceof Error ? e.message : "Live book failed") +
-          (API_URL.includes("localhost") ? ` — API is ${API_URL}` : ""),
+          " — Render is still API v0.1. Redeploy the pricing service from GitHub main.",
       );
     } finally {
       setLoading(false);
@@ -261,26 +272,11 @@ export default function Home() {
     return () => clearInterval(id);
   }, [live, refresh]);
 
-  useEffect(() => {
-    const ready = legs.some((l) => l.strike && l.entry_price && l.expiry);
-    if (ready) refresh();
-  }, [legs, refresh]);
-
-  async function onExpiry(i: number, expiry: string) {
-    setLegs((prev) => prev.map((x, j) => (j === i ? { ...x, expiry, strike: "" } : x)));
-    try {
-      const m = await loadMarket(expiry, false);
-      const atm = m.atm_strike != null ? String(m.atm_strike) : "";
-      setLegs((prev) => prev.map((x, j) => (j === i ? { ...x, expiry, strike: atm || x.strike } : x)));
-    } catch (e) {
-      setError(String((e as Error).message || e));
-    }
-  }
-
   const gross = tickets.reduce((s, t) => s + (Number(t.gross_pnl) || 0), 0);
   const net = tickets.reduce((s, t) => s + (Number(t.net_pnl) || 0), 0);
   const hasBook = tickets.length > 0;
-  const strikeList = market?.strikes || [];
+  const strikeList = market?.strikes?.length ? market.strikes : FALLBACK.strikes || [];
+  const expiryList = market?.expiries?.length ? market.expiries : FALLBACK.expiries || [];
 
   return (
     <main className="flex-1 flex flex-col items-center px-4 pt-20 pb-12">
@@ -289,14 +285,9 @@ export default function Home() {
           <div className="flex items-center justify-between gap-3">
             <h1 className="font-medium text-[22px]">Live book</h1>
             <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">
-              {live ? "LIVE" : "PAUSED"}{tickAt ? ` · ${tickAt}` : ""}{loading ? " · …" : ""}
+              {live ? "LIVE" : "PAUSED"}{tickAt ? ` · ${tickAt}` : ""}
             </span>
           </div>
-          <p className="text-[12px] font-[family-name:var(--font-mono)] text-white/45 mt-2">
-            {market?.underlying != null ? `NIFTY ${market.underlying.toFixed(1)}` : "waiting for chain"}
-            {market?.iv_atm != null ? ` · IV ${(market.iv_atm * 100).toFixed(1)}%` : ""}
-            {market?.expiry ? ` · ${market.expiry}` : ""}
-          </p>
         </header>
 
         <div className="grid grid-cols-2 gap-3 mb-5">
@@ -305,37 +296,29 @@ export default function Home() {
             <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(hasBook ? gross : 0) }}>
               {hasBook ? rupee(gross) : "—"}
             </div>
-            <div className="text-[11px] text-white/35 mt-1">LTP mark</div>
           </div>
           <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
             <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
             <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(hasBook ? net : 0) }}>
               {hasBook ? rupee(net) : "—"}
             </div>
-            <div className="text-[11px] text-white/35 mt-1">bid/ask after charges</div>
           </div>
         </div>
-
-        <p className="text-[12px] text-white/45 mb-3">Pick expiry and strike from the chain. Type only entry, target and stop.</p>
 
         <div className="space-y-3 mb-4">
           {legs.map((l, i) => (
             <div key={i} className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-white/10 rounded-xl p-3">
               <label className="text-[11px] text-white/40">Expiry
                 <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
-                  value={l.expiry} onChange={(e) => onExpiry(i, e.target.value)}>
-                  <option value="">pick expiry</option>
-                  {(market?.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
+                  value={l.expiry} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, expiry: e.target.value } : x))}>
+                  {expiryList.map((ex) => <option key={ex} value={ex}>{ex}</option>)}
                 </select>
               </label>
               <label className="text-[11px] text-white/40">Strike
                 <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
                   value={l.strike} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, strike: e.target.value } : x))}>
-                  <option value="">pick strike</option>
                   {strikeList.map((k) => (
-                    <option key={k} value={String(k)}>
-                      {k}{market?.atm_strike === k ? " · ATM" : ""}
-                    </option>
+                    <option key={k} value={String(k)}>{k}{k === market?.atm_strike ? " ATM" : ""}</option>
                   ))}
                 </select>
               </label>
@@ -366,7 +349,7 @@ export default function Home() {
         </div>
 
         <div className="flex flex-wrap gap-2 mb-4">
-          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => setLegs([...legs, { ...emptyLeg(), expiry: market?.expiry || legs[0]?.expiry || "", strike: market?.atm_strike != null ? String(market.atm_strike) : "" }])}>+ leg</button>
+          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => setLegs([...legs, emptyLeg()])}>+ leg</button>
           <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => refresh()} disabled={loading}>{loading ? "updating…" : "Refresh"}</button>
           <button type="button" className={`text-[13px] rounded-full px-3 py-1.5 ${live ? "cta-gradient text-white" : "border border-white/20"}`} onClick={() => setLive((v) => !v)}>
             {live ? "Live on · 15s" : "Paused"}
@@ -380,7 +363,7 @@ export default function Home() {
         )}
 
         <footer className="mt-10 pt-6 border-t border-white/10 text-[11px] text-white/35">
-          API {API_URL}. Expiry and strikes from the live NIFTY chain. ATM is pre-selected.
+          API {API_URL}. If docs still show v0.1.0, redeploy the Render service from this repo's main branch (root or services/pricing).
         </footer>
       </div>
     </main>
