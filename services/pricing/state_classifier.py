@@ -1,4 +1,4 @@
-"""Three-state classifier: Safe / At risk / Dead."""
+"""Classifier from OI, IV change, delta, gamma, theta. No expected-move."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -9,91 +9,91 @@ class PositionState(str, Enum):
     AT_RISK = "at_risk"
     DEAD = "dead"
 
-DEAD_MOVE_MULTIPLE = 2.0
-AT_RISK_MOVE_MULTIPLE = 1.0
-LOW_TIME_MIN = 30.0
-
 
 @dataclass(frozen=True)
 class Classification:
     state: PositionState
     low_confidence: bool
     reason: str
+    analysis: str
 
 
-def _loss_floor(stop_loss: float | None) -> float | None:
-    """User types Stop as rupees they can lose (500). Floor is -500."""
-    if stop_loss is None:
-        return None
-    return -abs(float(stop_loss))
-
-
-def classify_long(
+def classify_greeks(
+    *,
+    is_long: bool,
+    days_to_expiry: float,
+    iv: float | None,
+    iv_change: float | None,
+    delta: float | None,
+    gamma: float | None,
+    theta_per_hour: float | None,
+    oi_bias: str,
     net_now: float,
-    stop_loss: float | None,
-    required_move_pts: float,
-    expected_move_pts: float,
-    time_to_worthless_min: float | None,
+    stop_floor: float | None,
 ) -> Classification:
-    low_confidence = time_to_worthless_min is None
-    ttw = time_to_worthless_min if time_to_worthless_min is not None else float("inf")
-    sl = _loss_floor(stop_loss)
+    hits: list[str] = []
+    score = 0
 
-    if sl is not None and net_now <= sl:
+    if stop_floor is not None and net_now <= stop_floor:
         return Classification(
-            PositionState.DEAD, low_confidence,
-            f"net now (₹{net_now:.0f}) is through stop (₹{sl:.0f})",
+            PositionState.DEAD, False,
+            f"net ₹{net_now:.0f} through stop ₹{stop_floor:.0f}",
+            "Book is through the rupee stop. Exit logic is yours; the tag is Dead.",
         )
 
-    if required_move_pts > DEAD_MOVE_MULTIPLE * expected_move_pts or ttw < LOW_TIME_MIN:
-        return Classification(
-            PositionState.DEAD, low_confidence,
-            f"required move ({required_move_pts:.0f}pts) > {DEAD_MOVE_MULTIPLE:.0f}× expected "
-            f"({expected_move_pts:.0f}pts), or model life < {LOW_TIME_MIN:.0f}min",
-        )
+    dte = days_to_expiry
+    dlt = abs(delta or 0)
+    th = abs(theta_per_hour or 0)
+    ivc = iv_change if iv_change is not None else 0.0
+    against = (is_long and oi_bias == "bearish") or ((not is_long) and oi_bias == "bullish")
 
-    if required_move_pts > AT_RISK_MOVE_MULTIPLE * expected_move_pts:
-        return Classification(
-            PositionState.AT_RISK, low_confidence,
-            f"required move ({required_move_pts:.0f}pts) > expected move ({expected_move_pts:.0f}pts)",
-        )
+    if dte <= 1.5:
+        score += 2
+        hits.append(f"expiry in {dte:.1f}d")
+    elif dte <= 3:
+        score += 1
+        hits.append(f"near expiry ({dte:.1f}d)")
 
-    return Classification(
-        PositionState.SAFE, low_confidence,
-        f"required move ({required_move_pts:.0f}pts) ≤ expected ({expected_move_pts:.0f}pts); stop not hit",
+    if dlt < 8:
+        score += 2
+        hits.append(f"low delta ({dlt:.1f})")
+    elif dlt < 20:
+        score += 1
+        hits.append(f"modest delta ({dlt:.1f})")
+
+    if th >= 400:
+        score += 2
+        hits.append(f"theta {th:.0f}/h")
+    elif th >= 150:
+        score += 1
+        hits.append(f"theta {th:.0f}/h")
+
+    if ivc <= -0.02:
+        score += 2
+        hits.append(f"IV crashing ({ivc*100:.1f} pts)")
+    elif ivc < -0.005:
+        score += 1
+        hits.append(f"IV down ({ivc*100:.1f} pts)")
+
+    if against:
+        score += 1
+        hits.append(f"OI {oi_bias} vs position")
+
+    if score >= 5:
+        state = PositionState.DEAD
+        tag = "Unlikely to reach target on this path: " + ", ".join(hits) + "."
+    elif score >= 2:
+        state = PositionState.AT_RISK
+        tag = "Pressure on the plan: " + ", ".join(hits) + "."
+    else:
+        state = PositionState.SAFE
+        tag = "Greeks and OI are not fighting the plan" + ((": " + ", ".join(hits)) if hits else ".")
+
+    analysis = (
+        f"{'Long' if is_long else 'Short'}. {dte:.1f} days left. "
+        f"IV {(iv or 0)*100:.1f}% (chg {ivc*100:+.1f} pts). "
+        f"Delta {delta or 0:.1f}, gamma {gamma or 0:.4f}, theta {theta_per_hour or 0:.0f}/h. "
+        f"OI {oi_bias}. "
+        + tag
     )
-
-
-def classify_short(
-    net_now: float,
-    stop_loss: float | None,
-    adverse_move_pts: float,
-    expected_move_pts: float,
-    time_to_worthless_min: float | None,
-) -> Classification:
-    low_confidence = time_to_worthless_min is None
-    ttw = time_to_worthless_min if time_to_worthless_min is not None else float("inf")
-    sl = _loss_floor(stop_loss)
-
-    if sl is not None and net_now <= sl:
-        return Classification(
-            PositionState.DEAD, low_confidence,
-            f"net now (₹{net_now:.0f}) is through stop (₹{sl:.0f})",
-        )
-
-    if ttw < LOW_TIME_MIN and adverse_move_pts < 0.5 * expected_move_pts:
-        return Classification(
-            PositionState.DEAD, low_confidence,
-            f"cushion to stop ({adverse_move_pts:.0f}pts) < 0.5× expected with {ttw:.0f}min left",
-        )
-
-    if adverse_move_pts < expected_move_pts:
-        return Classification(
-            PositionState.AT_RISK, low_confidence,
-            f"adverse move to stop ({adverse_move_pts:.0f}pts) < expected ({expected_move_pts:.0f}pts)",
-        )
-
-    return Classification(
-        PositionState.SAFE, low_confidence,
-        f"adverse move to stop ({adverse_move_pts:.0f}pts) ≥ expected ({expected_move_pts:.0f}pts)",
-    )
+    return Classification(state, iv is None, tag, analysis)
