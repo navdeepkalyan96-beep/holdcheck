@@ -52,36 +52,31 @@ const STEPS = [
 export default function LandingPage() {
   return (
     <main className="flex-1">
-      <section className="max-w-[640px] mx-auto px-4 pt-16 pb-12">
-        <p className="font-[family-name:var(--font-mono)] text-[12px] text-[#7A818A] mb-4">
-          NIFTY OPTIONS · NSE · INDIA
-        </p>
-        <h1 className="font-[family-name:var(--font-display)] font-medium text-[32px] sm:text-[40px] leading-[1.15] tracking-tight">
-          Your broker&apos;s MTM isn&apos;t what you&apos;ll take home.
-        </h1>
-        <p className="text-[16px] text-[#9AA1AB] mt-4 leading-relaxed max-w-[520px]">
-          HoldCheck shows the net rupees you&apos;d actually bank if you exited a position right
-          now — charges and theta included — next to what the market is pricing for the rest of
-          the move. Cold numbers, not a feeling.
-        </p>
-        <div className="flex flex-wrap items-center gap-3 mt-8">
-          <Link
-            href="/app"
-            className="font-[family-name:var(--font-mono)] text-[13px] px-4 py-2.5 bg-[#EDEEF0] text-[#0C0E10] hover:bg-[#D4D6D9] transition-colors"
-          >
-            Open HoldCheck →
-          </Link>
-          <Link
-            href="/#how-it-works"
-            className="font-[family-name:var(--font-mono)] text-[13px] px-4 py-2.5 border border-[#2A2E32] hover:border-[#3A3E42] transition-colors"
-          >
-            How it works
-          </Link>
+      <section className="hero-gradient relative min-h-screen flex flex-col items-center justify-center px-6 text-center overflow-hidden">
+        <div className="max-w-[920px] mx-auto pt-8">
+          <h1 className="text-white font-[family-name:var(--font-display)] font-normal text-[36px] sm:text-[52px] lg:text-[60px] leading-[1.15] tracking-tight">
+            Your broker&apos;s MTM isn&apos;t what you&apos;ll take
+            <br className="hidden sm:block" /> home.
+          </h1>
+          <p className="mt-7 text-white/90 text-[18px] sm:text-[22px] leading-relaxed max-w-[820px] mx-auto">
+            HoldCheck shows the net rupees you&apos;d actually bank if you exited a
+            position right now — charges and theta included — next to what the
+            market is pricing for the rest of the move. Cold numbers, not a
+            feeling.
+          </p>
+          <div className="mt-16 flex justify-center">
+            <Link
+              href="/#how-it-works"
+              className="cta-gradient inline-flex items-center justify-center min-w-[260px] px-10 py-4 rounded-full text-white text-[20px] underline underline-offset-4 decoration-white/80 hover:decoration-white transition-all shadow-[0_12px_40px_rgba(80,90,255,0.35)]"
+            >
+              How it works?
+            </Link>
+          </div>
         </div>
       </section>
 
-      <section className="max-w-[640px] mx-auto px-4 py-10 border-t border-[#1C1F22]">
-        <div className="border border-[#22262A] bg-[#101315]">
+      <section className="bg-[#07051a] max-w-[640px] mx-auto px-4 py-16">
+        <div className="border border-white/10 bg-white/[0.03] rounded-xl">
           <div className="p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -89,11 +84,11 @@ export default function LandingPage() {
                   <span className="font-[family-name:var(--font-display)] font-medium text-[15px]">
                     NIFTY 24800CE
                   </span>
-                  <span className="text-[11px] text-[#7A818A] font-[family-name:var(--font-mono)]">
+                  <span className="text-[11px] text-white/50 font-[family-name:var(--font-mono)]">
                     LONG · 2L
                   </span>
                 </div>
-                <div className="text-[11px] text-[#7A818A] mt-0.5">expiry 2026-09-04</div>
+                <div className="text-[11px] text-white/45 mt-0.5">expiry 2026-09-04</div>
               </div>
               <div className="flex items-center gap-3">
                 <span className="font-[family-name:var(--font-mono)] text-[16px] tabular-nums" style={{ color: "#C77A6E" }}>
@@ -102,37 +97,45 @@ export default function LandingPage() {
                 <StatePill label="HOPE" tone="warning" />
               </div>
             </div>
-            <div className="mt-3 pt-3 border-t border-[#1C1F22] text-[13px] text-[#C4C8CD] leading-relaxed">
+            <div className="mt-3 pt-3 border-t border-white/10 text-[13px] text-white/75 leading-relaxed">
               Required move (202pts) is close to the expected move (214pts) the market is
               pricing. Theta ₹278/hour. Time to worthless ≈ 17 hours.
             </div>
           </div>
         </div>
-        <p className="text-[12px] text-[#5C6269] mt-2 font-[family-name:var(--font-mono)]">
+        <p className="text-[12px] text-white/40 mt-2 font-[family-name:var(--font-mono)]">
           real output from the pricing engine, not a mockup
         </p>
       </section>
 
-      <section id="how-it-works" className="max-w-[640px] mx-auto px-4 py-10 border-t border-[#1C1F22]">
+      <section id="how-it-works" className="bg-[#07051a] max-w-[640px] mx-auto px-4 py-10 border-t border-white/10">
         <h2 className="font-[family-name:var(--font-display)] font-medium text-[18px] mb-6">
           How it works
         </h2>
         <div className="space-y-6">
           {STEPS.map((s) => (
             <div key={s.n} className="flex gap-4">
-              <span className="font-[family-name:var(--font-mono)] text-[13px] text-[#5C6269] pt-0.5 shrink-0">
+              <span className="font-[family-name:var(--font-mono)] text-[13px] text-white/40 pt-0.5 shrink-0">
                 {s.n}
               </span>
               <div>
                 <div className="font-[family-name:var(--font-display)] font-medium text-[15px]">{s.title}</div>
-                <div className="text-[13px] text-[#9AA1AB] mt-1 leading-relaxed">{s.body}</div>
+                <div className="text-[13px] text-white/60 mt-1 leading-relaxed">{s.body}</div>
               </div>
             </div>
           ))}
         </div>
+        <div className="mt-8">
+          <Link
+            href="/app"
+            className="cta-gradient inline-flex items-center justify-center px-6 py-2.5 rounded-full text-white text-[14px]"
+          >
+            Open HoldCheck →
+          </Link>
+        </div>
       </section>
 
-      <section className="max-w-[640px] mx-auto px-4 py-10 border-t border-[#1C1F22]">
+      <section className="bg-[#07051a] max-w-[640px] mx-auto px-4 py-10 border-t border-white/10">
         <h2 className="font-[family-name:var(--font-display)] font-medium text-[18px] mb-6">
           What every ticket shows
         </h2>
@@ -140,31 +143,14 @@ export default function LandingPage() {
           {FEATURES.map((f) => (
             <div key={f.title}>
               <div className="font-[family-name:var(--font-display)] font-medium text-[14px]">{f.title}</div>
-              <div className="text-[13px] text-[#9AA1AB] mt-1 leading-relaxed">{f.body}</div>
+              <div className="text-[13px] text-white/60 mt-1 leading-relaxed">{f.body}</div>
             </div>
           ))}
         </div>
       </section>
 
-      <section className="max-w-[640px] mx-auto px-4 py-10 border-t border-[#1C1F22]">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="font-[family-name:var(--font-display)] font-medium text-[16px]">
-              Nifty options, NSE, India.
-            </div>
-            <div className="text-[13px] text-[#9AA1AB] mt-1">No login required for the CSV tool.</div>
-          </div>
-          <Link
-            href="/app"
-            className="font-[family-name:var(--font-mono)] text-[13px] px-4 py-2.5 bg-[#EDEEF0] text-[#0C0E10] hover:bg-[#D4D6D9] transition-colors shrink-0"
-          >
-            Open HoldCheck →
-          </Link>
-        </div>
-      </section>
-
-      <footer className="max-w-[640px] mx-auto px-4 py-8 border-t border-[#1C1F22]">
-        <p className="text-[11px] text-[#5C6269] leading-relaxed">
+      <footer className="bg-[#07051a] max-w-[640px] mx-auto px-4 py-8 border-t border-white/10">
+        <p className="text-[11px] text-white/40 leading-relaxed">
           Estimates only. Charges, theta, and required-move figures are modeled — not investment
           or tax advice. Verify against your broker&apos;s contract note.
         </p>
