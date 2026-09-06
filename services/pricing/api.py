@@ -10,8 +10,9 @@ from ticket_builder import build_ticket, IST
 from nse_live import snapshot as nse_snapshot, quote_leg, oi_window
 from angel_live import configured as angel_configured, snapshot as angel_snapshot
 from angel_candles import nifty_candles, option_candles
+from iv_study import study as iv_study
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.5.1-pnl")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.6.0-iv")
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,6 +123,14 @@ def market_candles(kind: str = "spot", expiry: str | None = None, strike: float 
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"kind": kind, "candles": data}
+
+
+@app.get("/market/iv-study")
+def market_iv_study(expiry: str, strike: float, option_type: str = "CE"):
+    try:
+        return iv_study(expiry, float(strike), option_type)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/market/nifty")
