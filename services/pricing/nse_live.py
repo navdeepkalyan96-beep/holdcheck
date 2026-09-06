@@ -1,12 +1,10 @@
-"""
-Fetch the official NSE index option-chain JSON (session cookie handshake).
-Used only server-side. Quotes, IV, OI — no orders.
-"""
+"""Fetch NSE index option-chain JSON (session cookie handshake)."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from threading import Lock
+import time
 
 import requests
 
@@ -23,39 +21,37 @@ HEADERS = {
 }
 
 _lock = Lock()
-_session: requests.Session | None = None
-_session_at: float = 0.0
+_state: dict = {"session": None, "at": 0.0}
 
 
-def _session() -> requests.Session:
-    global _session, _session_at
-    import time
+def _fresh_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    s.get(NSE_HOME, timeout=12)
+    return s
 
+
+def _get_session(force: bool = False) -> requests.Session:
     with _lock:
         now = time.time()
-        if _session is None or now - _session_at > 300:
-            s = requests.Session()
-            s.headers.update(HEADERS)
-            s.get(NSE_HOME, timeout=12)
-            _session = s
-            _session_at = now
-        return _session
+        sess = _state["session"]
+        if force or sess is None or now - _state["at"] > 300:
+            sess = _fresh_session()
+            _state["session"] = sess
+            _state["at"] = now
+        return sess
 
 
 def _parse_expiry(label: str) -> str:
-    """24-Sep-2026 → 2026-09-24"""
     return datetime.strptime(label, "%d-%b-%Y").date().isoformat()
 
 
 def fetch_chain(symbol: str = "NIFTY") -> dict:
-    s = _session()
+    s = _get_session()
     r = s.get(CHAIN_URL, params={"symbol": symbol.upper()}, timeout=15)
-    if r.status_code != 200 or "application/json" not in (r.headers.get("content-type") or ""):
-        global _session, _session_at
-        with _lock:
-            _session = None
-            _session_at = 0
-        s = _session()
+    ctype = r.headers.get("content-type") or ""
+    if r.status_code != 200 or "json" not in ctype:
+        s = _get_session(force=True)
         r = s.get(CHAIN_URL, params={"symbol": symbol.upper()}, timeout=15)
     r.raise_for_status()
     return r.json()
@@ -115,7 +111,6 @@ def snapshot(symbol: str = "NIFTY", expiry_iso: str | None = None) -> dict:
     atm = min(strikes, key=lambda k: abs(k - underlying)) if strikes else None
     atm_ce = next((r["CE"] for r in rows if r["strike"] == atm and r["CE"]), None) if atm else None
     atm_pe = next((r["PE"] for r in rows if r["strike"] == atm and r["PE"]), None) if atm else None
-
     ivs = [x for x in [
         atm_ce.get("iv") if atm_ce else None,
         atm_pe.get("iv") if atm_pe else None,
@@ -146,11 +141,9 @@ def quote_leg(snap: dict, strike: float, option_type: str) -> dict | None:
 
 
 def oi_window(snap: dict, entry_strike: float, n: int = 5) -> tuple[float, float]:
-    """Sum changeinOpenInterest for CE and PE over entry ± n listed strikes."""
     strikes = sorted({r["strike"] for r in snap["rows"]})
     if not strikes:
         return 0.0, 0.0
-    # nearest listed strike to entry, then ± n in the listed grid
     idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - entry_strike))
     lo, hi = max(0, idx - n), min(len(strikes), idx + n + 1)
     window = set(strikes[lo:hi])
