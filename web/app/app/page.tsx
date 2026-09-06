@@ -24,6 +24,16 @@ type Ticket = {
   state_reason: string;
 };
 
+type Market = {
+  underlying?: number;
+  iv_atm?: number;
+  expiry?: string;
+  asof?: string;
+  expiries?: string[];
+  strikes?: number[];
+  atm_strike?: number;
+};
+
 type Leg = {
   expiry: string;
   strike: string;
@@ -169,7 +179,7 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
 export default function Home() {
   const [legs, setLegs] = useState<Leg[]>([emptyLeg()]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [market, setMarket] = useState<{ underlying?: number; iv_atm?: number; expiry?: string; asof?: string; expiries?: string[] } | null>(null);
+  const [market, setMarket] = useState<Market | null>(null);
   const [live, setLive] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -177,18 +187,33 @@ export default function Home() {
   const legsRef = useRef(legs);
   legsRef.current = legs;
 
-  useEffect(() => {
-    fetch(`${API_URL}/market/nifty`)
-      .then(async (r) => {
-        const m = await r.json();
-        if (!r.ok) throw new Error(m.detail || "market failed");
-        setMarket(m);
-        if (m.expiry) {
-          setLegs((prev) => prev.map((l, i) => (i === 0 && !l.expiry ? { ...l, expiry: m.expiry } : l)));
-        }
-      })
-      .catch((e) => setError(String(e.message || e)));
+  const applyMarket = useCallback((m: Market, seedLeg: boolean) => {
+    setMarket(m);
+    if (!seedLeg) return;
+    const expiry = m.expiry || "";
+    const strike = m.atm_strike != null ? String(m.atm_strike) : "";
+    setLegs((prev) => prev.map((l, i) => {
+      if (i !== 0) return l;
+      return {
+        ...l,
+        expiry: l.expiry || expiry,
+        strike: l.strike || strike,
+      };
+    }));
   }, []);
+
+  const loadMarket = useCallback(async (expiry?: string, seed = false) => {
+    const url = expiry ? `${API_URL}/market/nifty?expiry=${encodeURIComponent(expiry)}` : `${API_URL}/market/nifty`;
+    const r = await fetch(url);
+    const m = await r.json();
+    if (!r.ok) throw new Error(typeof m.detail === "string" ? m.detail : "market failed");
+    applyMarket(m, seed);
+    return m as Market;
+  }, [applyMarket]);
+
+  useEffect(() => {
+    loadMarket(undefined, true).catch((e) => setError(String(e.message || e)));
+  }, [loadMarket]);
 
   const refresh = useCallback(async () => {
     const current = legsRef.current;
@@ -217,7 +242,7 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
       setTickets((data.tickets || []).map(normalizeTicket));
-      if (data.market) setMarket((m) => ({ ...m, ...data.market }));
+      if (data.market) applyMarket(data.market, false);
       setTickAt(new Date().toLocaleTimeString("en-IN", { hour12: false }));
       setError(null);
     } catch (e) {
@@ -228,7 +253,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyMarket]);
 
   useEffect(() => {
     if (!live) return;
@@ -241,9 +266,21 @@ export default function Home() {
     if (ready) refresh();
   }, [legs, refresh]);
 
+  async function onExpiry(i: number, expiry: string) {
+    setLegs((prev) => prev.map((x, j) => (j === i ? { ...x, expiry, strike: "" } : x)));
+    try {
+      const m = await loadMarket(expiry, false);
+      const atm = m.atm_strike != null ? String(m.atm_strike) : "";
+      setLegs((prev) => prev.map((x, j) => (j === i ? { ...x, expiry, strike: atm || x.strike } : x)));
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    }
+  }
+
   const gross = tickets.reduce((s, t) => s + (Number(t.gross_pnl) || 0), 0);
   const net = tickets.reduce((s, t) => s + (Number(t.net_pnl) || 0), 0);
   const hasBook = tickets.length > 0;
+  const strikeList = market?.strikes || [];
 
   return (
     <main className="flex-1 flex flex-col items-center px-4 pt-20 pb-12">
@@ -279,20 +316,28 @@ export default function Home() {
           </div>
         </div>
 
-        <p className="text-[12px] text-white/45 mb-3">Enter strike + entry. Gross/Net fill from the live chain and update every 15s.</p>
+        <p className="text-[12px] text-white/45 mb-3">Pick expiry and strike from the chain. Type only entry, target and stop.</p>
 
         <div className="space-y-3 mb-4">
           {legs.map((l, i) => (
             <div key={i} className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-white/10 rounded-xl p-3">
               <label className="text-[11px] text-white/40">Expiry
                 <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
-                  value={l.expiry} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, expiry: e.target.value } : x))}>
-                  <option value="">{market?.expiry || "pick expiry"}</option>
+                  value={l.expiry} onChange={(e) => onExpiry(i, e.target.value)}>
+                  <option value="">pick expiry</option>
                   {(market?.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
                 </select>
               </label>
               <label className="text-[11px] text-white/40">Strike
-                <input className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.strike} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, strike: e.target.value } : x))} />
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
+                  value={l.strike} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, strike: e.target.value } : x))}>
+                  <option value="">pick strike</option>
+                  {strikeList.map((k) => (
+                    <option key={k} value={String(k)}>
+                      {k}{market?.atm_strike === k ? " · ATM" : ""}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="text-[11px] text-white/40">Type
                 <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.option_type} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, option_type: e.target.value as "CE" | "PE" } : x))}>
@@ -321,7 +366,7 @@ export default function Home() {
         </div>
 
         <div className="flex flex-wrap gap-2 mb-4">
-          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => setLegs([...legs, { ...emptyLeg(), expiry: market?.expiry || legs[0]?.expiry || "" }])}>+ leg</button>
+          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => setLegs([...legs, { ...emptyLeg(), expiry: market?.expiry || legs[0]?.expiry || "", strike: market?.atm_strike != null ? String(market.atm_strike) : "" }])}>+ leg</button>
           <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => refresh()} disabled={loading}>{loading ? "updating…" : "Refresh"}</button>
           <button type="button" className={`text-[13px] rounded-full px-3 py-1.5 ${live ? "cta-gradient text-white" : "border border-white/20"}`} onClick={() => setLive((v) => !v)}>
             {live ? "Live on · 15s" : "Paused"}
@@ -335,7 +380,7 @@ export default function Home() {
         )}
 
         <footer className="mt-10 pt-6 border-t border-white/10 text-[11px] text-white/35">
-          API {API_URL}. Gross = LTP × qty. Net = live bid (long) or ask (short) minus charges.
+          API {API_URL}. Expiry and strikes from the live NIFTY chain. ATM is pre-selected.
         </footer>
       </div>
     </main>
