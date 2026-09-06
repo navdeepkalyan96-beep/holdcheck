@@ -20,39 +20,47 @@ type Ticket = {
   lots: number;
   side: "LONG" | "SHORT";
   entry_price: number;
-  net_if_exited_now: number;
+  gross_pnl: number;
+  net_pnl: number;
   exit_charges: ChargeBreakdown;
   no_live_bid_flag: boolean;
+  greeks: { delta: number; gamma: number; theta_per_hour: number; vega_per_vol_point: number };
   theta_per_hour: number;
+  hours_open: number | null;
+  theta_so_far: number | null;
   expected_move_pts: number;
   time_to_worthless_min: number | null;
-  theoretical_price_model: number;
   low_confidence: boolean;
-  plan: { target_net?: number; max_loss?: number; is_inferred: boolean };
-  required_move_pts: Record<string, number | null>;
+  plan: { target_net?: number; stop_loss?: number | null; is_inferred: boolean };
+  points_to_target: Record<string, number | null>;
+  oi: { bias: string; ce_oi_change: number; pe_oi_change: number; window: string; reason: string };
   state: string;
   state_reason: string;
 };
 
-type ApiResponse = {
-  tickets: Ticket[];
-  errors: { row: number; error: string }[];
-};
+type ApiResponse = { tickets: Ticket[]; errors: { row: number; error: string }[] };
 
 const STATE_STYLE: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  on_plan: { label: "ON PLAN", color: "#7FC49A", bg: "#12211A", border: "#2C4A3A" },
-  hope: { label: "HOPE", color: "#D6A25C", bg: "#241E12", border: "#4A3D26" },
-  fear: { label: "FEAR", color: "#D9C25C", bg: "#242012", border: "#4A4326" },
-  dead: { label: "DEAD", color: "#C77A6E", bg: "#241614", border: "#4A2E2A" },
-  safe: { label: "SAFE", color: "#7FC49A", bg: "#12211A", border: "#2C4A3A" },
+  safe: { label: "SAFE · ON PLAN", color: "#7FC49A", bg: "#12211A", border: "#2C4A3A" },
   at_risk: { label: "AT RISK", color: "#D6A25C", bg: "#241E12", border: "#4A3D26" },
-  near_danger: { label: "NEAR DANGER", color: "#C77A6E", bg: "#241614", border: "#4A2E2A" },
-  expiring_safe: { label: "EXPIRING SAFE", color: "#7FC49A", bg: "#12211A", border: "#2C4A3A" },
+  dead: { label: "DEAD", color: "#C77A6E", bg: "#241614", border: "#4A2E2A" },
+};
+
+const IV_LABEL: Record<string, string> = {
+  iv_minus_2pct: "IV −2%",
+  iv_unchanged: "IV unchanged",
+  iv_plus_2pct: "IV +2%",
 };
 
 function rupee(n: number): string {
-  const sign = n < 0 ? "-" : "";
-  return `${sign}\u20B9${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  const sign = n < 0 ? "-" : n > 0 ? "+" : "";
+  return `${sign}₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
+function pnlColor(n: number) {
+  if (n > 0) return "#7FC49A";
+  if (n < 0) return "#C77A6E";
+  return "#C4C8CD";
 }
 
 function StateChip({ state }: { state: string }) {
@@ -69,19 +77,15 @@ function StateChip({ state }: { state: string }) {
 
 function TicketCard({ ticket }: { ticket: Ticket }) {
   const [open, setOpen] = useState(false);
-  const isNegative = ticket.net_if_exited_now < 0;
+  const oiColor =
+    ticket.oi.bias === "bullish" ? "#7FC49A" : ticket.oi.bias === "bearish" ? "#C77A6E" : "#D6A25C";
 
   return (
     <div className="border border-white/10 bg-white/[0.03] rounded-xl overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full text-left p-4 flex items-center justify-between gap-3"
-      >
+      <button onClick={() => setOpen(!open)} className="w-full text-left p-4 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-[family-name:var(--font-display)] font-medium text-[15px]">
-              {ticket.instrument}
-            </span>
+            <span className="font-medium text-[15px]">{ticket.instrument}</span>
             <span className="text-[11px] text-white/45 font-[family-name:var(--font-mono)]">
               {ticket.side} · {ticket.lots}L
             </span>
@@ -89,89 +93,81 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
           <div className="text-[11px] text-white/40 mt-0.5">expiry {ticket.expiry}</div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <span
-            className="font-[family-name:var(--font-mono)] text-[16px] tabular-nums"
-            style={{ color: isNegative ? "#C77A6E" : "#7FC49A" }}
-          >
-            {rupee(ticket.net_if_exited_now)}
+          <span className="font-[family-name:var(--font-mono)] text-[16px] tabular-nums" style={{ color: pnlColor(ticket.net_pnl) }}>
+            {rupee(ticket.net_pnl)}
           </span>
           <StateChip state={ticket.state} />
         </div>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 border-t border-white/10 pt-3 space-y-3">
-          <p className="text-[13px] leading-relaxed text-white/75">{ticket.state_reason}.</p>
-          <p className="text-[12px] text-white/40 leading-relaxed">
-            Net is bid (long) or ask (short) minus the exit charge stack. State compares your plan
-            to expected move and remaining life — it is not an instruction to trade.
-          </p>
+        <div className="px-4 pb-5 border-t border-white/10 pt-4 space-y-5">
+          <p className="text-[13px] text-white/70 leading-relaxed">{ticket.state_reason}.</p>
+
+          <section>
+            <h3 className="text-[11px] tracking-wide font-[family-name:var(--font-mono)] text-white/40 mb-1">
+              1 · MONEY TO THETA SO FAR
+            </h3>
+            <p className="font-[family-name:var(--font-mono)] text-[16px] tabular-nums" style={{ color: pnlColor(ticket.theta_so_far ?? 0) }}>
+              {ticket.theta_so_far == null ? "need hours_open or entry_time" : rupee(ticket.theta_so_far)}
+            </p>
+            <p className="text-[12px] text-white/45 mt-1 leading-relaxed">
+              Instantaneous theta {rupee(ticket.theta_per_hour)}/hour
+              {ticket.hours_open != null ? ` × ${ticket.hours_open}h open` : ""}.
+              Longs pay time; shorts receive it. Flat-path model, not a realised tape.
+            </p>
+          </section>
+
+          <section>
+            <h3 className="text-[11px] tracking-wide font-[family-name:var(--font-mono)] text-white/40 mb-1">
+              2 · NIFTY POINTS TO TARGET
+            </h3>
+            <p className="text-[12px] text-white/45 mb-2">
+              Target {ticket.plan.target_net != null ? rupee(ticket.plan.target_net) : "—"}
+              {ticket.plan.stop_loss != null ? ` · stop ${rupee(ticket.plan.stop_loss)}` : ""}
+              {ticket.plan.is_inferred ? " · plan inferred" : ""}. Solved from Black-76 + fees at three IVs
+              (Δ {ticket.greeks.delta}, Γ {ticket.greeks.gamma}, θ {ticket.greeks.theta_per_hour}/h).
+              Expected move this expiry: {ticket.expected_move_pts.toFixed(0)} pts.
+            </p>
+            <div className="space-y-1 font-[family-name:var(--font-mono)] text-[13px]">
+              {Object.entries(ticket.points_to_target).map(([k, v]) => (
+                <div key={k} className="flex justify-between">
+                  <span className="text-white/45">{IV_LABEL[k] ?? k}</span>
+                  <span className="tabular-nums">
+                    {v == null ? "unreachable" : `${v > 0 ? "+" : ""}${v.toFixed(0)} pts`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-[11px] tracking-wide font-[family-name:var(--font-mono)] text-white/40 mb-1">
+              3 · OI SINCE ENTRY · {ticket.oi.window.toUpperCase()}
+            </h3>
+            <p className="text-[14px] font-medium" style={{ color: oiColor }}>
+              {ticket.oi.bias.toUpperCase()}
+            </p>
+            <p className="text-[12px] text-white/45 mt-1 leading-relaxed">{ticket.oi.reason}</p>
+          </section>
+
+          <section>
+            <h3 className="text-[11px] tracking-wide font-[family-name:var(--font-mono)] text-white/40 mb-1">
+              4 · STATE
+            </h3>
+            <StateChip state={ticket.state} />
+            <ul className="mt-2 text-[12px] text-white/45 space-y-1 leading-relaxed">
+              <li>Safe / on plan: required (or adverse) move ≤ expected move, stop not hit, model life ≥ 30 min.</li>
+              <li>At risk: required/adverse move &gt; expected move, stop not yet hit.</li>
+              <li>Dead: stop hit, or required &gt; 2× expected, or &lt; 30 min of model life.</li>
+            </ul>
+          </section>
 
           {ticket.no_live_bid_flag && (
-            <p className="text-[12px] text-[#D6A25C]">No live bid — using LTP. Low confidence.</p>
+            <p className="text-[12px] text-[#D6A25C]">No live bid/ask — net uses LTP. Low confidence.</p>
           )}
-          {ticket.low_confidence && !ticket.no_live_bid_flag && (
-            <p className="text-[12px] text-[#D6A25C]">Low confidence — verify near expiry.</p>
-          )}
-
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-[family-name:var(--font-mono)] text-[13px] tabular-nums">
-            <Metric label="Theta / hour" value={rupee(ticket.theta_per_hour)} />
-            <Metric label="Expected move" value={`${ticket.expected_move_pts.toFixed(0)} pts`} />
-            <Metric
-              label="Time to worthless"
-              value={ticket.time_to_worthless_min != null ? `${ticket.time_to_worthless_min.toFixed(0)} min` : "—"}
-            />
-            <Metric label="Model price" value={rupee(ticket.theoretical_price_model)} />
-          </div>
-
-          <div>
-            <div className="text-[11px] text-white/40 mb-1.5 font-[family-name:var(--font-mono)]">
-              {ticket.side === "LONG" ? "REQUIRED MOVE" : "ADVERSE MOVE"}
-            </div>
-            <div className="space-y-1 font-[family-name:var(--font-mono)] text-[13px]">
-              {Object.entries(ticket.required_move_pts).map(([k, v]) => (
-                <div key={k} className="flex justify-between">
-                  <span className="text-white/45">{k.replace(/_/g, " ")}</span>
-                  <span className="tabular-nums">{v != null ? `${v > 0 ? "+" : ""}${v.toFixed(0)} pts` : "unreachable"}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] text-white/40 mb-1.5 font-[family-name:var(--font-mono)]">
-              PLAN {ticket.plan.is_inferred ? "(no plan supplied — 50% premium placeholder)" : ""}
-            </div>
-            <div className="font-[family-name:var(--font-mono)] text-[13px] text-white/75">
-              {ticket.plan.target_net != null && `Target net ${rupee(ticket.plan.target_net)}`}
-              {ticket.plan.max_loss != null && `Max loss ${rupee(ticket.plan.max_loss)}`}
-            </div>
-          </div>
-
-          <details className="text-[12px]">
-            <summary className="cursor-pointer text-white/45 font-[family-name:var(--font-mono)]">
-              exit charges breakdown
-            </summary>
-            <div className="mt-2 space-y-1 font-[family-name:var(--font-mono)] pl-2 border-l border-white/10">
-              {Object.entries(ticket.exit_charges).map(([k, v]) => (
-                <div key={k} className="flex justify-between text-white/60">
-                  <span>{k.replace(/_/g, " ")}</span>
-                  <span className="tabular-nums">{rupee(v)}</span>
-                </div>
-              ))}
-            </div>
-          </details>
         </div>
       )}
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-white/40 text-[11px]">{label}</div>
-      <div>{value}</div>
     </div>
   );
 }
@@ -205,18 +201,38 @@ export default function Home() {
     }
   }
 
+  const gross = tickets?.reduce((s, t) => s + t.gross_pnl, 0) ?? 0;
+  const net = tickets?.reduce((s, t) => s + t.net_pnl, 0) ?? 0;
+
   return (
     <main className="flex-1 flex flex-col items-center px-4 pt-20 pb-12">
       <div className="w-full max-w-[560px]">
         <header className="mb-6">
-          <h1 className="font-[family-name:var(--font-display)] font-medium text-[22px] tracking-tight">
-            Upload today&apos;s positions
-          </h1>
+          <h1 className="font-medium text-[22px] tracking-tight">Open book</h1>
           <p className="text-[13px] text-white/55 mt-2 leading-relaxed">
-            Each row is one option leg. The file is computed in memory and discarded. Expand a
-            ticket to see charges, theta, required move, and why the state was assigned.
+            Gross is LTP mark. Net is tickwise exit — bid if long, ask if short, minus charges.
+            Set target and stop in the CSV (<code>target_net</code>, <code>stop_loss</code>).
           </p>
         </header>
+
+        {tickets && tickets.length > 0 && (
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
+              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
+              <div className="font-[family-name:var(--font-mono)] text-[22px] tabular-nums mt-1" style={{ color: pnlColor(gross) }}>
+                {rupee(gross)}
+              </div>
+              <div className="text-[11px] text-white/35 mt-1">LTP × qty</div>
+            </div>
+            <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
+              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
+              <div className="font-[family-name:var(--font-mono)] text-[22px] tabular-nums mt-1" style={{ color: pnlColor(net) }}>
+                {rupee(net)}
+              </div>
+              <div className="text-[11px] text-white/35 mt-1">bid/ask after charges</div>
+            </div>
+          </div>
+        )}
 
         <div
           onClick={() => fileInput.current?.click()}
@@ -226,7 +242,7 @@ export default function Home() {
             const file = e.dataTransfer.files?.[0];
             if (file) handleFile(file);
           }}
-          className="border border-dashed border-white/20 hover:border-white/40 rounded-xl cursor-pointer px-4 py-10 text-center transition-colors bg-white/[0.02]"
+          className="border border-dashed border-white/20 hover:border-white/40 rounded-xl cursor-pointer px-4 py-8 text-center transition-colors bg-white/[0.02]"
         >
           <input
             ref={fileInput}
@@ -239,7 +255,7 @@ export default function Home() {
             }}
           />
           <p className="text-[13px] text-white/80 font-[family-name:var(--font-mono)]">
-            {loading ? "computing…" : "drop tradebook CSV, or tap to choose"}
+            {loading ? "computing…" : "drop positions CSV, or tap to choose"}
           </p>
           <a
             href={`${API_URL}/csv-template`}
@@ -248,31 +264,11 @@ export default function Home() {
             onClick={(e) => e.stopPropagation()}
             className="text-[11px] text-white/45 underline underline-offset-2 mt-2 inline-block"
           >
-            download column template
+            column template
           </a>
         </div>
 
-        <details className="mt-5 text-[13px] text-white/55 leading-relaxed">
-          <summary className="cursor-pointer text-white/70">Required columns</summary>
-          <p className="mt-2">
-            <span className="font-[family-name:var(--font-mono)] text-[12px] text-white/70">
-              underlying, expiry, strike, option_type, lot_size, side, lots, entry_price, ltp, bid,
-              ask, iv_atm, atm_ce_premium, atm_pe_premium, forward, target_net, max_loss
-            </span>
-          </p>
-          <ul className="mt-3 space-y-1.5 list-disc pl-4">
-            <li><code className="text-white/80">option_type</code> is CE or PE. <code className="text-white/80">side</code> is LONG or SHORT.</li>
-            <li><code className="text-white/80">expiry</code> is YYYY-MM-DD.</li>
-            <li>Leave <code className="text-white/80">target_net</code> / <code className="text-white/80">max_loss</code> blank to use a 50%-premium placeholder plan, flagged in the ticket.</li>
-            <li>Missing bid/ask falls back to LTP and marks the ticket low confidence.</li>
-            <li>Fill IV, ATM premiums, and forward from the option chain. There is no live feed in this version.</li>
-          </ul>
-        </details>
-
-        {error && (
-          <p className="text-[13px] text-[#C77A6E] mt-3 font-[family-name:var(--font-mono)]">{error}</p>
-        )}
-
+        {error && <p className="text-[13px] text-[#C77A6E] mt-3 font-[family-name:var(--font-mono)]">{error}</p>}
         {errors.length > 0 && (
           <div className="mt-3 text-[12px] text-[#D6A25C] font-[family-name:var(--font-mono)]">
             {errors.map((e) => (
@@ -295,8 +291,8 @@ export default function Home() {
 
         <footer className="mt-10 pt-6 border-t border-white/10">
           <p className="text-[11px] text-white/35 leading-relaxed">
-            Estimates only. Charges, theta, and required-move figures are modeled — not investment
-            or tax advice. Verify against your broker&apos;s contract note.
+            Estimates only. Gross, net, theta, OI tilt, and state are modeled — not investment advice
+            and not an instruction to exit. Verify against the contract note and the live chain.
           </p>
         </footer>
       </div>
