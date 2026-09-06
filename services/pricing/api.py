@@ -9,8 +9,9 @@ from pydantic import BaseModel
 from ticket_builder import build_ticket, IST
 from nse_live import snapshot as nse_snapshot, quote_leg, oi_window
 from angel_live import configured as angel_configured, snapshot as angel_snapshot
+from angel_candles import nifty_candles, option_candles
 
-app = FastAPI(title="HoldCheck Pricing Service", version="0.4.1-angel")
+app = FastAPI(title="HoldCheck Pricing Service", version="0.5.0-ui")
 
 app.add_middleware(
     CORSMiddleware,
@@ -115,6 +116,18 @@ def health():
     }
 
 
+@app.get("/market/candles")
+def market_candles(kind: str = "spot", expiry: str | None = None, strike: float | None = None, option_type: str = "CE"):
+    try:
+        if kind == "option" and expiry and strike is not None:
+            data = option_candles(expiry, float(strike), option_type)
+        else:
+            data = nifty_candles()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"kind": kind, "candles": data}
+
+
 @app.get("/market/nifty")
 def market_nifty(expiry: str | None = None):
     try:
@@ -127,7 +140,6 @@ def market_nifty(expiry: str | None = None):
 def _hydrate(pos: dict, snap: dict) -> dict:
     q = quote_leg(snap, float(pos["strike"]), pos["option_type"])
     if not q:
-        # try paise-scaled strike match
         q = quote_leg(snap, float(pos["strike"]) * 100, pos["option_type"]) or quote_leg(snap, float(pos["strike"]) / 100, pos["option_type"])
     if not q:
         raise ValueError(f"No quote for {pos['strike']} {pos['option_type']} {snap.get('expiry')}")
