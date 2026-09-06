@@ -123,16 +123,23 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
       <button onClick={() => setOpen(!open)} className="w-full text-left p-4 flex items-center justify-between gap-3">
         <div>
           <div className="font-medium text-[15px]">{ticket.instrument} <span className="text-[11px] text-white/45 font-[family-name:var(--font-mono)]">{ticket.side} · {ticket.lots}L</span></div>
-          <div className="text-[11px] text-white/40">expiry {ticket.expiry}</div>
+          <div className="text-[11px] text-white/40">gross {rupee(ticket.gross_pnl)} · net {rupee(ticket.net_pnl)}</div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="font-[family-name:var(--font-mono)] text-[16px] tabular-nums" style={{ color: pnlColor(ticket.net_pnl) }}>{rupee(ticket.net_pnl)}</span>
-          <StateChip state={ticket.state} />
-        </div>
+        <StateChip state={ticket.state} />
       </button>
       {open && (
         <div className="px-4 pb-5 border-t border-white/10 pt-4 space-y-4 text-[13px]">
           <p className="text-white/70">{ticket.state_reason}.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS</div>
+              <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.gross_pnl) }}>{rupee(ticket.gross_pnl)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET TICK</div>
+              <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.net_pnl) }}>{rupee(ticket.net_pnl)}</div>
+            </div>
+          </div>
           <div>
             <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">THETA SO FAR</div>
             <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.theta_so_far ?? 0) }}>
@@ -161,27 +168,31 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
 
 export default function Home() {
   const [legs, setLegs] = useState<Leg[]>([emptyLeg()]);
-  const [tickets, setTickets] = useState<Ticket[] | null>(null);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [market, setMarket] = useState<{ underlying?: number; iv_atm?: number; expiry?: string; asof?: string; expiries?: string[] } | null>(null);
-  const [live, setLive] = useState(false);
+  const [live, setLive] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const liveRef = useRef(false);
+  const [tickAt, setTickAt] = useState<string | null>(null);
+  const legsRef = useRef(legs);
+  legsRef.current = legs;
 
   useEffect(() => {
     fetch(`${API_URL}/market/nifty`)
-      .then((r) => r.json())
-      .then((m) => {
+      .then(async (r) => {
+        const m = await r.json();
+        if (!r.ok) throw new Error(m.detail || "market failed");
         setMarket(m);
         if (m.expiry) {
           setLegs((prev) => prev.map((l, i) => (i === 0 && !l.expiry ? { ...l, expiry: m.expiry } : l)));
         }
       })
-      .catch(() => {});
+      .catch((e) => setError(String(e.message || e)));
   }, []);
 
   const refresh = useCallback(async () => {
-    const positions = legs
+    const current = legsRef.current;
+    const positions = current
       .filter((l) => l.strike && l.entry_price && l.expiry)
       .map((l) => ({
         expiry: l.expiry,
@@ -195,12 +206,8 @@ export default function Home() {
         stop_loss: l.stop_loss ? Number(l.stop_loss) : null,
         hours_open: l.hours_open ? Number(l.hours_open) : null,
       }));
-    if (!positions.length) {
-      setError("Add expiry, strike, and entry on at least one leg.");
-      return;
-    }
+    if (!positions.length) return;
     setLoading(true);
-    setError(null);
     try {
       const res = await fetch(`${API_URL}/tickets/live`, {
         method: "POST",
@@ -211,69 +218,76 @@ export default function Home() {
       if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
       setTickets((data.tickets || []).map(normalizeTicket));
       if (data.market) setMarket((m) => ({ ...m, ...data.market }));
+      setTickAt(new Date().toLocaleTimeString("en-IN", { hour12: false }));
+      setError(null);
     } catch (e) {
       setError(
         (e instanceof Error ? e.message : "Live book failed") +
-          (API_URL.includes("localhost") ? ` — API is ${API_URL}. Point Vercel NEXT_PUBLIC_API_URL at the live pricing service.` : ""),
+          (API_URL.includes("localhost") ? ` — API is ${API_URL}` : ""),
       );
     } finally {
       setLoading(false);
     }
-  }, [legs]);
-
-  useEffect(() => {
-    liveRef.current = live;
-  }, [live]);
+  }, []);
 
   useEffect(() => {
     if (!live) return;
-    refresh();
-    const id = setInterval(() => {
-      if (liveRef.current) refresh();
-    }, 15000);
+    const id = setInterval(() => refresh(), 15000);
     return () => clearInterval(id);
   }, [live, refresh]);
 
-  const gross = tickets?.reduce((s, t) => s + t.gross_pnl, 0) ?? 0;
-  const net = tickets?.reduce((s, t) => s + t.net_pnl, 0) ?? 0;
+  useEffect(() => {
+    const ready = legs.some((l) => l.strike && l.entry_price && l.expiry);
+    if (ready) refresh();
+  }, [legs, refresh]);
+
+  const gross = tickets.reduce((s, t) => s + (Number(t.gross_pnl) || 0), 0);
+  const net = tickets.reduce((s, t) => s + (Number(t.net_pnl) || 0), 0);
+  const hasBook = tickets.length > 0;
 
   return (
     <main className="flex-1 flex flex-col items-center px-4 pt-20 pb-12">
       <div className="w-full max-w-[640px]">
-        <header className="mb-5">
-          <h1 className="font-medium text-[22px]">Live book</h1>
-          <p className="text-[13px] text-white/55 mt-1">
-            Quotes, ATM IV, and OI from the NSE NIFTY chain. Positions stay yours. Polls every 15s when live.
+        <header className="mb-4">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="font-medium text-[22px]">Live book</h1>
+            <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">
+              {live ? "LIVE" : "PAUSED"}{tickAt ? ` · ${tickAt}` : ""}{loading ? " · …" : ""}
+            </span>
+          </div>
+          <p className="text-[12px] font-[family-name:var(--font-mono)] text-white/45 mt-2">
+            {market?.underlying != null ? `NIFTY ${market.underlying.toFixed(1)}` : "waiting for chain"}
+            {market?.iv_atm != null ? ` · IV ${(market.iv_atm * 100).toFixed(1)}%` : ""}
+            {market?.expiry ? ` · ${market.expiry}` : ""}
           </p>
-          {market?.underlying != null && (
-            <p className="text-[12px] font-[family-name:var(--font-mono)] text-white/45 mt-2">
-              NIFTY {market.underlying.toFixed(1)}
-              {market.iv_atm != null ? ` · ATM IV ${(market.iv_atm * 100).toFixed(1)}%` : ""}
-              {market.expiry ? ` · ${market.expiry}` : ""}
-            </p>
-          )}
         </header>
 
-        {tickets && tickets.length > 0 && (
-          <div className="grid grid-cols-2 gap-3 mb-5">
-            <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
-              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
-              <div className="font-[family-name:var(--font-mono)] text-[22px] tabular-nums" style={{ color: pnlColor(gross) }}>{rupee(gross)}</div>
+        <div className="grid grid-cols-2 gap-3 mb-5">
+          <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
+            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
+            <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(hasBook ? gross : 0) }}>
+              {hasBook ? rupee(gross) : "—"}
             </div>
-            <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
-              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
-              <div className="font-[family-name:var(--font-mono)] text-[22px] tabular-nums" style={{ color: pnlColor(net) }}>{rupee(net)}</div>
-            </div>
+            <div className="text-[11px] text-white/35 mt-1">LTP mark</div>
           </div>
-        )}
+          <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
+            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
+            <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(hasBook ? net : 0) }}>
+              {hasBook ? rupee(net) : "—"}
+            </div>
+            <div className="text-[11px] text-white/35 mt-1">bid/ask after charges</div>
+          </div>
+        </div>
+
+        <p className="text-[12px] text-white/45 mb-3">Enter strike + entry. Gross/Net fill from the live chain and update every 15s.</p>
 
         <div className="space-y-3 mb-4">
           {legs.map((l, i) => (
             <div key={i} className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-white/10 rounded-xl p-3">
               <label className="text-[11px] text-white/40">Expiry
-                <select className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]"
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
                   value={l.expiry} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, expiry: e.target.value } : x))}>
-                  <option value="">{market?.expiry || "YYYY-MM-DD"}</option>
+                  <option value="">{market?.expiry || "pick expiry"}</option>
                   {(market?.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
                 </select>
               </label>
@@ -281,12 +295,12 @@ export default function Home() {
                 <input className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.strike} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, strike: e.target.value } : x))} />
               </label>
               <label className="text-[11px] text-white/40">Type
-                <select className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.option_type} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, option_type: e.target.value as "CE" | "PE" } : x))}>
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.option_type} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, option_type: e.target.value as "CE" | "PE" } : x))}>
                   <option>CE</option><option>PE</option>
                 </select>
               </label>
               <label className="text-[11px] text-white/40">Side
-                <select className="w-full bg-transparent border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.side} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, side: e.target.value as "LONG" | "SHORT" } : x))}>
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.side} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, side: e.target.value as "LONG" | "SHORT" } : x))}>
                   <option>LONG</option><option>SHORT</option>
                 </select>
               </label>
@@ -308,20 +322,20 @@ export default function Home() {
 
         <div className="flex flex-wrap gap-2 mb-4">
           <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => setLegs([...legs, { ...emptyLeg(), expiry: market?.expiry || legs[0]?.expiry || "" }])}>+ leg</button>
-          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => refresh()} disabled={loading}>{loading ? "updating…" : "Refresh once"}</button>
+          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => refresh()} disabled={loading}>{loading ? "updating…" : "Refresh"}</button>
           <button type="button" className={`text-[13px] rounded-full px-3 py-1.5 ${live ? "cta-gradient text-white" : "border border-white/20"}`} onClick={() => setLive((v) => !v)}>
-            {live ? "Live on · 15s" : "Start live"}
+            {live ? "Live on · 15s" : "Paused"}
           </button>
         </div>
 
         {error && <p className="text-[13px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
 
-        {tickets && tickets.length > 0 && (
+        {tickets.length > 0 && (
           <div className="space-y-2">{tickets.map((t, i) => <TicketCard key={i} ticket={t} />)}</div>
         )}
 
         <footer className="mt-10 pt-6 border-t border-white/10 text-[11px] text-white/35">
-          Pricing API {API_URL}. Chain from NSE (unofficial session). Estimates only — not advice, no orders.
+          API {API_URL}. Gross = LTP × qty. Net = live bid (long) or ask (short) minus charges.
         </footer>
       </div>
     </main>
