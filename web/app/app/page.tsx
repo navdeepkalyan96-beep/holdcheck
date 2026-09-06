@@ -72,21 +72,21 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
   const isNegative = ticket.net_if_exited_now < 0;
 
   return (
-    <div className="border border-[#22262A] bg-[#101315]">
+    <div className="border border-white/10 bg-white/[0.03] rounded-xl overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
         className="w-full text-left p-4 flex items-center justify-between gap-3"
       >
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="font-[family-name:var(--font-display)] font-medium text-[15px]">
               {ticket.instrument}
             </span>
-            <span className="text-[11px] text-[#7A818A] font-[family-name:var(--font-mono)]">
+            <span className="text-[11px] text-white/45 font-[family-name:var(--font-mono)]">
               {ticket.side} · {ticket.lots}L
             </span>
           </div>
-          <div className="text-[11px] text-[#7A818A] mt-0.5">expiry {ticket.expiry}</div>
+          <div className="text-[11px] text-white/40 mt-0.5">expiry {ticket.expiry}</div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <span
@@ -100,8 +100,12 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
       </button>
 
       {open && (
-        <div className="px-4 pb-4 border-t border-[#1C1F22] pt-3 space-y-3">
-          <p className="text-[13px] leading-relaxed text-[#C4C8CD]">{ticket.state_reason}.</p>
+        <div className="px-4 pb-4 border-t border-white/10 pt-3 space-y-3">
+          <p className="text-[13px] leading-relaxed text-white/75">{ticket.state_reason}.</p>
+          <p className="text-[12px] text-white/40 leading-relaxed">
+            Net is bid (long) or ask (short) minus the exit charge stack. State compares your plan
+            to expected move and remaining life — it is not an instruction to trade.
+          </p>
 
           {ticket.no_live_bid_flag && (
             <p className="text-[12px] text-[#D6A25C]">No live bid — using LTP. Low confidence.</p>
@@ -121,13 +125,13 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
           </div>
 
           <div>
-            <div className="text-[11px] text-[#7A818A] mb-1.5 font-[family-name:var(--font-mono)]">
+            <div className="text-[11px] text-white/40 mb-1.5 font-[family-name:var(--font-mono)]">
               {ticket.side === "LONG" ? "REQUIRED MOVE" : "ADVERSE MOVE"}
             </div>
             <div className="space-y-1 font-[family-name:var(--font-mono)] text-[13px]">
               {Object.entries(ticket.required_move_pts).map(([k, v]) => (
                 <div key={k} className="flex justify-between">
-                  <span className="text-[#7A818A]">{k.replace(/_/g, " ")}</span>
+                  <span className="text-white/45">{k.replace(/_/g, " ")}</span>
                   <span className="tabular-nums">{v != null ? `${v > 0 ? "+" : ""}${v.toFixed(0)} pts` : "unreachable"}</span>
                 </div>
               ))}
@@ -135,22 +139,22 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
           </div>
 
           <div>
-            <div className="text-[11px] text-[#7A818A] mb-1.5 font-[family-name:var(--font-mono)]">
-              PLAN {ticket.plan.is_inferred ? "(no plan — inferred)" : ""}
+            <div className="text-[11px] text-white/40 mb-1.5 font-[family-name:var(--font-mono)]">
+              PLAN {ticket.plan.is_inferred ? "(no plan supplied — 50% premium placeholder)" : ""}
             </div>
-            <div className="font-[family-name:var(--font-mono)] text-[13px] text-[#C4C8CD]">
+            <div className="font-[family-name:var(--font-mono)] text-[13px] text-white/75">
               {ticket.plan.target_net != null && `Target net ${rupee(ticket.plan.target_net)}`}
               {ticket.plan.max_loss != null && `Max loss ${rupee(ticket.plan.max_loss)}`}
             </div>
           </div>
 
           <details className="text-[12px]">
-            <summary className="cursor-pointer text-[#7A818A] font-[family-name:var(--font-mono)]">
+            <summary className="cursor-pointer text-white/45 font-[family-name:var(--font-mono)]">
               exit charges breakdown
             </summary>
-            <div className="mt-2 space-y-1 font-[family-name:var(--font-mono)] pl-2 border-l border-[#22262A]">
+            <div className="mt-2 space-y-1 font-[family-name:var(--font-mono)] pl-2 border-l border-white/10">
               {Object.entries(ticket.exit_charges).map(([k, v]) => (
-                <div key={k} className="flex justify-between text-[#9AA1AB]">
+                <div key={k} className="flex justify-between text-white/60">
                   <span>{k.replace(/_/g, " ")}</span>
                   <span className="tabular-nums">{rupee(v)}</span>
                 </div>
@@ -166,7 +170,7 @@ function TicketCard({ ticket }: { ticket: Ticket }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[#7A818A] text-[11px]">{label}</div>
+      <div className="text-white/40 text-[11px]">{label}</div>
       <div>{value}</div>
     </div>
   );
@@ -202,14 +206,15 @@ export default function Home() {
   }
 
   return (
-    <main className="flex-1 flex flex-col items-center px-4 py-8">
-      <div className="w-full max-w-[480px]">
+    <main className="flex-1 flex flex-col items-center px-4 pt-20 pb-12">
+      <div className="w-full max-w-[560px]">
         <header className="mb-6">
-          <h1 className="font-[family-name:var(--font-display)] font-medium text-[18px] tracking-tight">
+          <h1 className="font-[family-name:var(--font-display)] font-medium text-[22px] tracking-tight">
             Upload today&apos;s positions
           </h1>
-          <p className="text-[13px] text-[#7A818A] mt-1 leading-relaxed">
-            CSV in, computed tickets out. Nothing is stored — each upload is processed and forgotten.
+          <p className="text-[13px] text-white/55 mt-2 leading-relaxed">
+            Each row is one option leg. The file is computed in memory and discarded. Expand a
+            ticket to see charges, theta, required move, and why the state was assigned.
           </p>
         </header>
 
@@ -221,7 +226,7 @@ export default function Home() {
             const file = e.dataTransfer.files?.[0];
             if (file) handleFile(file);
           }}
-          className="border border-dashed border-[#2A2E32] hover:border-[#3A3E42] cursor-pointer px-4 py-8 text-center transition-colors"
+          className="border border-dashed border-white/20 hover:border-white/40 rounded-xl cursor-pointer px-4 py-10 text-center transition-colors bg-white/[0.02]"
         >
           <input
             ref={fileInput}
@@ -233,7 +238,7 @@ export default function Home() {
               if (file) handleFile(file);
             }}
           />
-          <p className="text-[13px] text-[#C4C8CD] font-[family-name:var(--font-mono)]">
+          <p className="text-[13px] text-white/80 font-[family-name:var(--font-mono)]">
             {loading ? "computing…" : "drop tradebook CSV, or tap to choose"}
           </p>
           <a
@@ -241,11 +246,28 @@ export default function Home() {
             target="_blank"
             rel="noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="text-[11px] text-[#7A818A] underline underline-offset-2 mt-2 inline-block"
+            className="text-[11px] text-white/45 underline underline-offset-2 mt-2 inline-block"
           >
-            view expected columns
+            download column template
           </a>
         </div>
+
+        <details className="mt-5 text-[13px] text-white/55 leading-relaxed">
+          <summary className="cursor-pointer text-white/70">Required columns</summary>
+          <p className="mt-2">
+            <span className="font-[family-name:var(--font-mono)] text-[12px] text-white/70">
+              underlying, expiry, strike, option_type, lot_size, side, lots, entry_price, ltp, bid,
+              ask, iv_atm, atm_ce_premium, atm_pe_premium, forward, target_net, max_loss
+            </span>
+          </p>
+          <ul className="mt-3 space-y-1.5 list-disc pl-4">
+            <li><code className="text-white/80">option_type</code> is CE or PE. <code className="text-white/80">side</code> is LONG or SHORT.</li>
+            <li><code className="text-white/80">expiry</code> is YYYY-MM-DD.</li>
+            <li>Leave <code className="text-white/80">target_net</code> / <code className="text-white/80">max_loss</code> blank to use a 50%-premium placeholder plan, flagged in the ticket.</li>
+            <li>Missing bid/ask falls back to LTP and marks the ticket low confidence.</li>
+            <li>Fill IV, ATM premiums, and forward from the option chain. There is no live feed in this version.</li>
+          </ul>
+        </details>
 
         {error && (
           <p className="text-[13px] text-[#C77A6E] mt-3 font-[family-name:var(--font-mono)]">{error}</p>
@@ -268,11 +290,11 @@ export default function Home() {
         )}
 
         {tickets && tickets.length === 0 && (
-          <p className="text-[13px] text-[#7A818A] mt-6">No positions in this file.</p>
+          <p className="text-[13px] text-white/45 mt-6">No positions in this file.</p>
         )}
 
-        <footer className="mt-10 pt-6 border-t border-[#1C1F22]">
-          <p className="text-[11px] text-[#5C6269] leading-relaxed">
+        <footer className="mt-10 pt-6 border-t border-white/10">
+          <p className="text-[11px] text-white/35 leading-relaxed">
             Estimates only. Charges, theta, and required-move figures are modeled — not investment
             or tax advice. Verify against your broker&apos;s contract note.
           </p>
