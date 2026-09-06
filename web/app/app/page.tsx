@@ -41,7 +41,6 @@ function glow(n: number) {
 }
 
 function tvSymbolForOption(expiry: string, strike: string, type: "CE" | "PE") {
-  // NSE:NIFTY260908C24800
   const [y, m, d] = (expiry || "").split("-");
   if (!y || !strike) return "NSE:NIFTY";
   const yy = y.slice(2);
@@ -50,12 +49,16 @@ function tvSymbolForOption(expiry: string, strike: string, type: "CE" | "PE") {
 }
 
 function TradingViewChart({ symbol }: { symbol: string }) {
-  const src = `https://www.tradingview.com/widgetembed/?frameElementId=tv&symbol=${encodeURIComponent(symbol)}&interval=5&hidesidetoolbar=0&symboledit=0&saveimage=0&toolbarbg=0d0b1a&studies=[]&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&hideideas=1&locale=en`;
+  const src =
+    "https://s.tradingview.com/widgetembed/?symbol=" +
+    encodeURIComponent(symbol) +
+    "&interval=5&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=0d0b1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&hideideas=1&locale=en&allow_symbol_change=1";
   return (
     <iframe
       title={symbol}
       src={src}
-      className="w-full h-[280px] rounded-lg border-0 bg-black"
+      className="w-full h-[320px] rounded-lg border-0 bg-black"
+      referrerPolicy="no-referrer-when-downgrade"
       allow="fullscreen"
     />
   );
@@ -81,11 +84,11 @@ export default function Home() {
     const m = await r.json();
     if (!r.ok) throw new Error(typeof m.detail === "string" ? m.detail : "market fail");
     setMarket(m);
-    setLegs((prev) => prev.map((x, i) => i ? x : {
+    setLegs((prev) => prev.map((x, i) => (i ? x : {
       ...x,
       expiry: x.expiry || m.expiry || "",
       strike: x.strike || (m.atm_strike != null ? String(m.atm_strike) : ""),
-    }));
+    })));
 
     const positions = legsRef.current.filter((p) => p.strike && p.entry_price && p.expiry).map((p) => ({
       expiry: p.expiry, strike: Number(p.strike), option_type: p.option_type, side: p.side,
@@ -99,7 +102,8 @@ export default function Home() {
       return;
     }
     const res = await fetch(`${API_URL}/tickets/live`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol: "NIFTY", expiry: positions[0].expiry, positions }),
     });
     const data = await res.json();
@@ -138,7 +142,7 @@ export default function Home() {
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
           <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "—"}</div>
         </div>
-        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${has ? glow(net) : ""`}>
+        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${has ? glow(net) : ""}`}>
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
           <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "—"}</div>
         </div>
@@ -159,26 +163,22 @@ export default function Home() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-white/10 rounded-xl p-3 mb-3">
         <label className="text-[11px] text-white/40">Expiry
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.expiry}
-            onChange={(e) => setLegs([{ ...L, expiry: e.target.value }])}>
+          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.expiry} onChange={(e) => setLegs([{ ...L, expiry: e.target.value }])}>
             {(market.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
           </select>
         </label>
         <label className="text-[11px] text-white/40">Strike
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.strike}
-            onChange={(e) => setLegs([{ ...L, strike: e.target.value }])}>
+          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.strike} onChange={(e) => setLegs([{ ...L, strike: e.target.value }])}>
             {(market.strikes || []).filter((k) => k > 1000 && k < 100000).map((k) => <option key={k} value={String(k)}>{k}</option>)}
           </select>
         </label>
         <label className="text-[11px] text-white/40">Type
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.option_type}
-            onChange={(e) => setLegs([{ ...L, option_type: e.target.value as "CE" | "PE" }])}>
+          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.option_type} onChange={(e) => setLegs([{ ...L, option_type: e.target.value as "CE" | "PE" }])}>
             <option>CE</option><option>PE</option>
           </select>
         </label>
         <label className="text-[11px] text-white/40">Side
-          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.side}
-            onChange={(e) => setLegs([{ ...L, side: e.target.value as "LONG" | "SHORT" }])}>
+          <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={L.side} onChange={(e) => setLegs([{ ...L, side: e.target.value as "LONG" | "SHORT" }])}>
             <option>LONG</option><option>SHORT</option>
           </select>
         </label>
