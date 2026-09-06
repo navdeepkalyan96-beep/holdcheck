@@ -1,14 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_URL, pricingPath } from "../lib/api";
 
 type Row = { code: string; label: string; last: number | null; chg: number | null; pct: number | null };
-
-function wsBase() {
-  return API_URL.replace(/^http/, "ws");
-}
 
 function Arrow({ up }: { up: boolean }) {
   return <span className="inline-block text-[11px] leading-none">{up ? "▲" : "▼"}</span>;
@@ -19,46 +14,26 @@ export default function MarketStrip() {
 
   useEffect(() => {
     let live = true;
-    let sock: WebSocket | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-
-    const apply = (d: { rows?: Row[] }) => {
-      if (live && Array.isArray(d.rows)) setRows(d.rows);
-    };
-
-    const http = () => {
-      fetch(`${API_URL}/market/strip`)
+    const load = () => {
+      fetch(pricingPath("/market/strip"))
         .then((r) => r.json())
-        .then(apply)
-        .catch(() => {});
+        .then((d) => {
+          if (live && Array.isArray(d.rows)) setRows(d.rows);
+        })
+        .catch(() => {
+          fetch(`${API_URL}/market/strip`)
+            .then((r) => r.json())
+            .then((d) => {
+              if (live && Array.isArray(d.rows)) setRows(d.rows);
+            })
+            .catch(() => {});
+        });
     };
-
-    const connect = () => {
-      try {
-        sock = new WebSocket(`${wsBase()}/ws/tape`);
-        sock.onmessage = (ev) => {
-          try {
-            apply(JSON.parse(ev.data));
-          } catch {
-            /* ignore */
-          }
-        };
-        sock.onerror = () => http();
-        sock.onclose = () => {
-          if (!live) return;
-          retry = setTimeout(connect, 4000);
-        };
-      } catch {
-        http();
-      }
-    };
-
-    http();
-    connect();
+    load();
+    const id = setInterval(load, 15000);
     return () => {
       live = false;
-      if (retry) clearTimeout(retry);
-      sock?.close();
+      clearInterval(id);
     };
   }, []);
 
