@@ -4,30 +4,30 @@ import Logo from "./Logo";
 export default function Nav() {
   return (
     <nav className="w-full absolute top-0 left-0 z-20">
-      <div className="w-full px-6 sm:px-10 h-20 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-3 text-white min-w-0">
-          <Logo className="w-10 h-10 sm:w-11 sm:h-11 shrink-0" />
-          <span className="flex flex-col leading-none">
-            <span className="font-[family-name:var(--font-display)] font-medium text-[22px] sm:text-[26px] tracking-tight">
+      <div className="w-full px-4 sm:px-8 h-[4.25rem] sm:h-20 flex items-center justify-between gap-3">
+        <Link href="/" className="flex items-center gap-2.5 text-white min-w-0">
+          <Logo className="w-8 h-8 sm:w-11 sm:h-11 shrink-0" />
+          <span className="flex flex-col leading-none min-w-0">
+            <span className="font-[family-name:var(--font-display)] font-medium text-[18px] sm:text-[26px] tracking-tight truncate">
               HoldCheck
             </span>
-            <span className="mt-1 font-[family-name:var(--font-mono)] text-[10px] sm:text-[11px] tracking-[0.14em] uppercase text-white/45">
+            <span className="hidden sm:block mt-1 font-[family-name:var(--font-mono)] text-[11px] tracking-[0.14em] uppercase text-white/45">
               Trade management for the open lot
             </span>
           </span>
         </Link>
-        <div className="flex items-center gap-4 sm:gap-6">
-          <Link href="/pricing" className="text-[13px] text-white/70 hover:text-white transition-colors">
+        <div className="flex items-center gap-3 sm:gap-6 shrink-0">
+          <Link href="/pricing" className="text-[12px] sm:text-[13px] text-white/70 hover:text-white">
             Pricing
           </Link>
-          <Link href="/login" className="text-[13px] text-white/70 hover:text-white transition-colors">
+          <Link href="/login" className="text-[12px] sm:text-[13px] text-white/70 hover:text-white">
             Login
           </Link>
           <Link
             href="/app"
-            className="text-[13px] font-[family-name:var(--font-mono)] px-3 py-1.5 rounded-full border border-white/25 text-white/90 hover:border-white/50 hover:bg-white/5 transition-colors"
+            className="text-[12px] sm:text-[13px] font-[family-name:var(--font-mono)] px-2.5 sm:px-3 py-1.5 rounded-full border border-white/25 text-white/90"
           >
-            Open app
+            App
           </Link>
         </div>
       </div>
