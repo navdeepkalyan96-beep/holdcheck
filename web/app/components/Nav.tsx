@@ -11,11 +11,11 @@ export default function Nav() {
           </span>
         </Link>
         <div className="flex items-center gap-4 sm:gap-5">
-          <Link href="/#how-it-works" className="text-[13px] text-white/70 hover:text-white transition-colors">
-            How
-          </Link>
           <Link href="/pricing" className="text-[13px] text-white/70 hover:text-white transition-colors">
             Pricing
+          </Link>
+          <Link href="/login" className="text-[13px] text-white/70 hover:text-white transition-colors">
+            Login
           </Link>
           <Link
             href="/app"
