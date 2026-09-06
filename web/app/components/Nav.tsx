@@ -1,11 +1,12 @@
 import Link from "next/link";
+import Logo from "./Logo";
 
 export default function Nav() {
   return (
     <nav className="w-full absolute top-0 left-0 z-20">
       <div className="w-full px-6 sm:px-10 h-20 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-3 text-white min-w-0">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#7FF0C8] shrink-0" aria-hidden="true" />
+          <Logo className="w-10 h-10 sm:w-11 sm:h-11 shrink-0" />
           <span className="flex flex-col leading-none">
             <span className="font-[family-name:var(--font-display)] font-medium text-[22px] sm:text-[26px] tracking-tight">
               HoldCheck
