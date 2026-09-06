@@ -39,48 +39,46 @@ function glow(n: number) {
   if (n < 0) return "glow-loss";
   return "";
 }
-
-function TradingViewSpot() {
-  // INDEX:NIFTY is licensed for the free embed. NSE:NIFTY / NFO options are TV-app only.
-  const src =
-    "https://s.tradingview.com/widgetembed/?symbol=" +
-    encodeURIComponent("INDEX:NIFTY") +
-    "&interval=5&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=0d0b1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&hideideas=1&locale=en&allow_symbol_change=1";
-  return (
-    <iframe
-      title="NIFTY"
-      src={src}
-      className="w-full h-[320px] rounded-lg border-0 bg-black"
-      referrerPolicy="no-referrer-when-downgrade"
-      allow="fullscreen"
-    />
-  );
+function hhmm(t: string) {
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return String(t).slice(11, 16);
+  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function ZoomCandles({ data }: { data: Candle[] }) {
-  const [span, setSpan] = useState(80);
-  const view = useMemo(() => data.slice(-Math.max(20, span)), [data, span]);
+function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
+  const [span, setSpan] = useState(48);
+  const view = useMemo(() => data.slice(-Math.max(12, span)), [data, span]);
+  const W = 420, H = 240, L = 52, R = 8, T = 10, B = 28;
   if (!data.length) {
-    return <div className="h-[220px] flex items-center justify-center text-[12px] text-white/40">no Angel candles (weekend / token)</div>;
+    return <div className="h-[240px] flex items-center justify-center text-[12px] text-white/40">{empty}</div>;
   }
-  const w = 360, h = 220, pad = 10;
   const max = Math.max(...view.map((d) => d.h));
   const min = Math.min(...view.map((d) => d.l));
   const rng = max - min || 1;
-  const bw = Math.max(2, (w - pad * 2) / view.length - 1);
-  const y = (v: number) => pad + ((max - v) / rng) * (h - pad * 2);
+  const plotW = W - L - R, plotH = H - T - B;
+  const y = (v: number) => T + ((max - v) / rng) * plotH;
+  const ticks = 4;
+  const xLabels = [0, Math.floor(view.length / 2), view.length - 1];
   return (
     <div>
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        className="w-full h-[220px]"
-        onWheel={(e) => {
-          e.preventDefault();
-          setSpan((s) => Math.min(data.length, Math.max(20, s + (e.deltaY > 0 ? 8 : -8))));
-        }}
-      >
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[240px]">
+        {Array.from({ length: ticks + 1 }, (_, i) => {
+          const v = max - (rng * i) / ticks;
+          const yy = y(v);
+          return (
+            <g key={i}>
+              <line x1={L} x2={W - R} y1={yy} y2={yy} stroke="rgba(255,255,255,0.08)" />
+              <text x={L - 6} y={yy + 3} textAnchor="end" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">
+                {v >= 1000 ? v.toFixed(0) : v.toFixed(2)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={L} x2={L} y1={T} y2={H - B} stroke="rgba(255,255,255,0.2)" />
+        <line x1={L} x2={W - R} y1={H - B} y2={H - B} stroke="rgba(255,255,255,0.2)" />
         {view.map((d, i) => {
-          const x = pad + i * ((w - pad * 2) / view.length) + bw / 2;
+          const x = L + (i + 0.5) * (plotW / view.length);
+          const bw = Math.max(2, plotW / view.length - 1.5);
           const color = d.c >= d.o ? "#3dff8a" : "#ff5c6a";
           return (
             <g key={i}>
@@ -89,10 +87,20 @@ function ZoomCandles({ data }: { data: Candle[] }) {
             </g>
           );
         })}
+        {xLabels.map((i) => {
+          const d = view[i];
+          if (!d) return null;
+          const x = L + (i + 0.5) * (plotW / view.length);
+          return (
+            <text key={i} x={x} y={H - 8} textAnchor="middle" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">
+              {hhmm(d.t)}
+            </text>
+          );
+        })}
       </svg>
       <div className="flex gap-2 justify-end text-[11px]">
-        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.max(20, s - 15))}>zoom +</button>
-        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.min(data.length, s + 15))}>zoom −</button>
+        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.max(12, s - 12))}>zoom +</button>
+        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.min(Math.max(data.length, 12), s + 12))}>zoom −</button>
       </div>
     </div>
   );
@@ -105,6 +113,7 @@ export default function Home() {
   }]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [market, setMarket] = useState<Market>({});
+  const [spotBars, setSpotBars] = useState<Candle[]>([]);
   const [optBars, setOptBars] = useState<Candle[]>([]);
   const [analysis, setAnalysis] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,11 +135,14 @@ export default function Home() {
     })));
 
     const LL = legsRef.current[0];
-    if (LL?.expiry && LL?.strike) {
-      const cr = await fetch(`${API_URL}/market/candles?kind=option&expiry=${LL.expiry}&strike=${LL.strike}&option_type=${LL.option_type}`);
-      const cj = await cr.json().catch(() => ({ candles: [] }));
-      setOptBars(cj.candles || []);
-    }
+    const [spot, opt] = await Promise.all([
+      fetch(`${API_URL}/market/candles?kind=spot`).then((x) => x.json()).catch(() => ({ candles: [] })),
+      LL?.expiry && LL?.strike
+        ? fetch(`${API_URL}/market/candles?kind=option&expiry=${LL.expiry}&strike=${LL.strike}&option_type=${LL.option_type}`).then((x) => x.json()).catch(() => ({ candles: [] }))
+        : Promise.resolve({ candles: [] }),
+    ]);
+    setSpotBars(spot.candles || []);
+    setOptBars(opt.candles || []);
 
     const positions = legsRef.current.filter((p) => p.strike && p.entry_price && p.expiry).map((p) => ({
       expiry: p.expiry, strike: Number(p.strike), option_type: p.option_type, side: p.side,
@@ -183,7 +195,7 @@ export default function Home() {
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
           <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "—"}</div>
         </div>
-        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${has ? glow(net) : ""}`}>
+        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${has ? glow(net) : ""`}>
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
           <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "—"}</div>
         </div>
@@ -191,14 +203,14 @@ export default function Home() {
 
       <div className="grid md:grid-cols-2 gap-3 mb-4">
         <section className="border border-white/10 rounded-xl p-3 bg-white/[0.03]">
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT · TradingView INDEX:NIFTY</div>
+          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT · Angel 5m</div>
           <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">{market.underlying ? market.underlying.toFixed(2) : "—"}</div>
-          <TradingViewSpot />
+          <AngelChart data={spotBars} empty="no Nifty candles (Sunday / Angel hist)" />
         </section>
         <section className={`border rounded-xl p-3 ${call ? "panel-call" : "panel-put"}`}>
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/50">{call ? "CALL" : "PUT"} · {L.strike || "strike"} · Angel candles</div>
+          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/50">{call ? "CALL" : "PUT"} · {L.strike || "strike"} · Angel 5m</div>
           <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">mark {px(mark)} <span className="text-[12px] text-white/50">open {px(q?.open)} · ltp {px(q?.ltp)}</span></div>
-          <ZoomCandles data={optBars} />
+          <AngelChart data={optBars} empty="pick expiry + strike — weekend may be empty" />
         </section>
       </div>
 
@@ -240,9 +252,7 @@ export default function Home() {
       <button type="button" className="cta-gradient w-full rounded-xl py-4 text-[18px] font-medium mb-4" onClick={() => { setAnalysis(true); loadAll().catch((e) => setError(String(e.message || e))); }}>
         Analyze
       </button>
-
       {error && <p className="text-[13px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
-
       {analysis && t0 && (
         <section className="border border-white/10 rounded-xl p-5 bg-white/[0.03] space-y-4">
           <div className="text-center font-[family-name:var(--font-mono)] text-[42px] tracking-wide" style={{ color: t0.state === "dead" ? "#C77A6E" : t0.state === "safe" || t0.state === "on_plan" ? "#7FC49A" : "#D6A25C" }}>
