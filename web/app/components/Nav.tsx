@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Nav() {
   return (
-    <nav className="w-full absolute top-0 left-0 z-20">
+    <nav className="w-full absolute top-8 left-0 z-20">
       <div className="max-w-[1100px] mx-auto px-5 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 text-white">
           <span className="w-2 h-2 rounded-full bg-[#7FF0C8]" aria-hidden="true" />

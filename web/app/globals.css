@@ -36,3 +36,11 @@ body { font-family: var(--font-display); }
   background: linear-gradient(180deg, rgba(255,200,40,0.22) 0%, rgba(28,22,8,0.92) 100%);
   border-color: rgba(255,210,70,0.45);
 }
+
+.tape-track {
+  animation: tape-scroll 48s linear infinite;
+}
+@keyframes tape-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
