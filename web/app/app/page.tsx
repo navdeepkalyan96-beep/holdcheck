@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-type Candle = { t: string; o: number; h: number; l: number; c: number };
 type Quote = { ltp?: number | null; open?: number | null; bid?: number | null; ask?: number | null };
 type Market = {
   underlying?: number; expiry?: string; expiries?: string[]; strikes?: number[];
@@ -41,30 +40,24 @@ function glow(n: number) {
   return "";
 }
 
-function CandleChart({ data }: { data: Candle[] }) {
-  if (!data.length) {
-    return <div className="h-[160px] flex items-center justify-center text-[12px] text-white/35">no candles yet</div>;
-  }
-  const w = 320, h = 160, pad = 8;
-  const highs = data.map((d) => d.h), lows = data.map((d) => d.l);
-  const max = Math.max(...highs), min = Math.min(...lows);
-  const span = max - min || 1;
-  const bw = Math.max(2, (w - pad * 2) / data.length - 1);
-  const y = (v: number) => pad + ((max - v) / span) * (h - pad * 2);
+function tvSymbolForOption(expiry: string, strike: string, type: "CE" | "PE") {
+  // NSE:NIFTY260908C24800
+  const [y, m, d] = (expiry || "").split("-");
+  if (!y || !strike) return "NSE:NIFTY";
+  const yy = y.slice(2);
+  const cp = type === "CE" ? "C" : "P";
+  return `NSE:NIFTY${yy}${m}${d}${cp}${strike}`;
+}
+
+function TradingViewChart({ symbol }: { symbol: string }) {
+  const src = `https://www.tradingview.com/widgetembed/?frameElementId=tv&symbol=${encodeURIComponent(symbol)}&interval=5&hidesidetoolbar=0&symboledit=0&saveimage=0&toolbarbg=0d0b1a&studies=[]&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&hideideas=1&locale=en`;
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[160px]">
-      {data.map((d, i) => {
-        const x = pad + i * ((w - pad * 2) / data.length) + bw / 2;
-        const up = d.c >= d.o;
-        const color = up ? "#3dff8a" : "#ff5c6a";
-        return (
-          <g key={i}>
-            <line x1={x} x2={x} y1={y(d.h)} y2={y(d.l)} stroke={color} strokeWidth="1" />
-            <rect x={x - bw / 2} y={y(Math.max(d.o, d.c))} width={bw} height={Math.max(1, Math.abs(y(d.o) - y(d.c)))} fill={color} />
-          </g>
-        );
-      })}
-    </svg>
+    <iframe
+      title={symbol}
+      src={src}
+      className="w-full h-[280px] rounded-lg border-0 bg-black"
+      allow="fullscreen"
+    />
   );
 }
 
@@ -75,8 +68,6 @@ export default function Home() {
   }]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [market, setMarket] = useState<Market>({});
-  const [spotBars, setSpotBars] = useState<Candle[]>([]);
-  const [optBars, setOptBars] = useState<Candle[]>([]);
   const [analysis, setAnalysis] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<string | null>(null);
@@ -95,14 +86,6 @@ export default function Home() {
       expiry: x.expiry || m.expiry || "",
       strike: x.strike || (m.atm_strike != null ? String(m.atm_strike) : ""),
     }));
-    const [spot, opt] = await Promise.all([
-      fetch(`${API_URL}/market/candles?kind=spot`).then((x) => x.json()).catch(() => ({ candles: [] })),
-      L?.expiry && L?.strike
-        ? fetch(`${API_URL}/market/candles?kind=option&expiry=${L.expiry}&strike=${L.strike}&option_type=${L.option_type}`).then((x) => x.json()).catch(() => ({ candles: [] }))
-        : Promise.resolve({ candles: [] }),
-    ]);
-    setSpotBars(spot.candles || []);
-    setOptBars(opt.candles || []);
 
     const positions = legsRef.current.filter((p) => p.strike && p.entry_price && p.expiry).map((p) => ({
       expiry: p.expiry, strike: Number(p.strike), option_type: p.option_type, side: p.side,
@@ -111,7 +94,10 @@ export default function Home() {
       stop_loss: p.stop_loss ? Number(p.stop_loss) : null,
       hours_open: p.hours_open ? Number(p.hours_open) : null,
     }));
-    if (!positions.length) return;
+    if (!positions.length) {
+      setTickAt(new Date().toLocaleTimeString("en-IN", { hour12: false }));
+      return;
+    }
     const res = await fetch(`${API_URL}/tickets/live`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol: "NIFTY", expiry: positions[0].expiry, positions }),
@@ -138,6 +124,7 @@ export default function Home() {
   const mark = q?.open ?? q?.ltp;
   const call = L.option_type === "CE";
   const t0 = tickets[0];
+  const optSymbol = tvSymbolForOption(L.expiry, L.strike, L.option_type);
 
   return (
     <main className="flex-1 px-3 pt-16 pb-10 max-w-[1100px] mx-auto w-full">
@@ -151,7 +138,7 @@ export default function Home() {
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
           <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? gross : 0) }}>{has ? rupee(gross) : "—"}</div>
         </div>
-        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${has ? glow(net) : ""}`}>
+        <div className={`border border-white/10 rounded-xl p-4 bg-white/[0.03] ${has ? glow(net) : ""`}>
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
           <div className="font-[family-name:var(--font-mono)] text-[28px] tabular-nums" style={{ color: pnlColor(has ? net : 0) }}>{has ? rupee(net) : "—"}</div>
         </div>
@@ -161,12 +148,12 @@ export default function Home() {
         <section className="border border-white/10 rounded-xl p-3 bg-white/[0.03]">
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT</div>
           <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">{market.underlying ? market.underlying.toFixed(2) : "—"}</div>
-          <CandleChart data={spotBars} />
+          <TradingViewChart symbol="NSE:NIFTY" />
         </section>
         <section className={`border rounded-xl p-3 ${call ? "panel-call" : "panel-put"}`}>
           <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/50">{call ? "CALL" : "PUT"} · {L.strike || "strike"}</div>
           <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">mark {px(mark)} <span className="text-[12px] text-white/50">open {px(q?.open)} · ltp {px(q?.ltp)}</span></div>
-          <CandleChart data={optBars} />
+          <TradingViewChart symbol={optSymbol} />
         </section>
       </div>
 
