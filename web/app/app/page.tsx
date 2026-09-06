@@ -8,14 +8,14 @@ type Candle = { t: string; o: number; h: number; l: number; c: number };
 type Quote = { ltp?: number | null; open?: number | null; bid?: number | null; ask?: number | null };
 type Market = {
   underlying?: number; expiry?: string; expiries?: string[]; strikes?: number[];
-  atm_strike?: number; quotes?: Record<string, Quote>;
+  atm_strike?: number; quotes?: Record<string, Quote>; iv_atm?: number | null;
 };
 type Charges = Record<string, number>;
 type Ticket = {
   instrument: string; side: string; lots: number; gross_pnl: number; net_pnl: number;
   theta_per_hour: number; theta_so_far: number | null; expected_move_pts: number;
   points_to_target: Record<string, number | null>;
-  oi: { bias: string; reason: string };
+  oi: { bias: string; reason: string; ce_oi_change?: number; pe_oi_change?: number };
   state: string; state_reason: string;
   exit_charges?: Charges;
   entry_charges?: Charges;
@@ -48,6 +48,11 @@ function hhmm(t: string) {
   const d = new Date(t);
   if (Number.isNaN(d.getTime())) return String(t).slice(11, 16);
   return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function ivLabel(k: string) {
+  if (k.includes("minus")) return "IV -2%";
+  if (k.includes("plus")) return "IV +2%";
+  return "IV unchanged";
 }
 
 function Drop({ label, value, onChange, children, width } : {
@@ -88,39 +93,37 @@ function AngelChart({ data, empty }: { data: Candle[]; empty: string }) {
   const ticks = 4;
   const xLabels = [0, Math.floor(view.length / 2), view.length - 1];
   return (
-    <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[240px]">
-        {Array.from({ length: ticks + 1 }, (_, i) => {
-          const v = max - (rng * i) / ticks;
-          const yy = y(v);
-          return (
-            <g key={i}>
-              <line x1={left} x2={W - right} y1={yy} y2={yy} stroke="rgba(255,255,255,0.08)" />
-              <text x={left - 6} y={yy + 3} textAnchor="end" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{v >= 1000 ? v.toFixed(0) : v.toFixed(2)}</text>
-            </g>
-          );
-        })}
-        <line x1={left} x2={left} y1={top} y2={H - bottom} stroke="rgba(255,255,255,0.2)" />
-        <line x1={left} x2={W - right} y1={H - bottom} y2={H - bottom} stroke="rgba(255,255,255,0.2)" />
-        {view.map((d, i) => {
-          const x = left + (i + 0.5) * (plotW / view.length);
-          const bw = Math.max(2, plotW / view.length - 1.5);
-          const color = d.c >= d.o ? "#3dff8a" : "#ff5c6a";
-          return (
-            <g key={i}>
-              <line x1={x} x2={x} y1={y(d.h)} y2={y(d.l)} stroke={color} strokeWidth="1" />
-              <rect x={x - bw / 2} y={y(Math.max(d.o, d.c))} width={bw} height={Math.max(1, Math.abs(y(d.o) - y(d.c)))} fill={color} />
-            </g>
-          );
-        })}
-        {xLabels.map((i) => {
-          const d = view[i];
-          if (!d) return null;
-          const x = left + (i + 0.5) * (plotW / view.length);
-          return <text key={i} x={x} y={H - 8} textAnchor="middle" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{hhmm(d.t)}</text>;
-        })}
-      </svg>
-    </div>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[240px]">
+      {Array.from({ length: ticks + 1 }, (_, i) => {
+        const v = max - (rng * i) / ticks;
+        const yy = y(v);
+        return (
+          <g key={i}>
+            <line x1={left} x2={W - right} y1={yy} y2={yy} stroke="rgba(255,255,255,0.08)" />
+            <text x={left - 6} y={yy + 3} textAnchor="end" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{v >= 1000 ? v.toFixed(0) : v.toFixed(2)}</text>
+          </g>
+        );
+      })}
+      <line x1={left} x2={left} y1={top} y2={H - bottom} stroke="rgba(255,255,255,0.2)" />
+      <line x1={left} x2={W - right} y1={H - bottom} y2={H - bottom} stroke="rgba(255,255,255,0.2)" />
+      {view.map((d, i) => {
+        const x = left + (i + 0.5) * (plotW / view.length);
+        const bw = Math.max(2, plotW / view.length - 1.5);
+        const color = d.c >= d.o ? "#3dff8a" : "#ff5c6a";
+        return (
+          <g key={i}>
+            <line x1={x} x2={x} y1={y(d.h)} y2={y(d.l)} stroke={color} strokeWidth="1" />
+            <rect x={x - bw / 2} y={y(Math.max(d.o, d.c))} width={bw} height={Math.max(1, Math.abs(y(d.o) - y(d.c)))} fill={color} />
+          </g>
+        );
+      })}
+      {xLabels.map((i) => {
+        const d = view[i];
+        if (!d) return null;
+        const x = left + (i + 0.5) * (plotW / view.length);
+        return <text key={i} x={x} y={H - 8} textAnchor="middle" fill="#8b9098" fontSize="9" fontFamily="ui-monospace, monospace">{hhmm(d.t)}</text>;
+      })}
+    </svg>
   );
 }
 
@@ -167,7 +170,7 @@ export default function Home() {
       lots: Number(p.lots), lot_size: Number(p.lot_size || 65), entry_price: Number(p.entry_price),
       target_net: p.target_net ? Number(p.target_net) : null,
       stop_loss: p.stop_loss ? Number(p.stop_loss) : null,
-      hours_open: p.hours_open ? Number(p.hours_open) : null,
+      hours_open: p.hours_open ? Number(p.hours_open) : 2,
     }));
     if (!positions.length) {
       setTickAt(new Date().toLocaleTimeString("en-IN", { hour12: false }));
@@ -207,7 +210,6 @@ export default function Home() {
   const netLocal = grossLocal != null ? grossLocal - feeTotal : (t0 ? t0.net_pnl : null);
   const has = grossLocal != null;
   const call = L.option_type === "CE";
-  const charges = { ...(t0?.entry_charges || {}), ...(t0?.exit_charges || {}) };
   const chargeRows = Object.entries({
     entry_brokerage: t0?.entry_charges?.brokerage,
     exit_brokerage: t0?.exit_charges?.brokerage,
@@ -245,13 +247,11 @@ export default function Home() {
         <div className={`border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${has ? glow(grossLocal || 0) : ""}`}>
           <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">GROSS</div>
           <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(grossLocal || 0) }}>{has ? rupee(grossLocal || 0) : "\u2014"}</div>
-          <div className="text-[11px] text-white/40 mt-1 font-[family-name:var(--font-mono)]">{points != null ? `${points > 0 ? "+" : ""}${points.toFixed(2)} pts \u00d7 ${qty}` : "LTP \u2212 entry \u00d7 qty"}</div>
         </div>
         <div className={`relative group border border-white/10 rounded-2xl p-4 bg-white/[0.03] ${netLocal != null ? glow(netLocal) : ""}`}>
           <div className="text-[10px] tracking-[0.16em] font-[family-name:var(--font-mono)] text-white/35">NET TICK</div>
           <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(netLocal || 0) }}>{netLocal != null ? rupee(netLocal) : "\u2014"}</div>
           <div className="hidden group-hover:block absolute right-3 top-full mt-2 z-20 w-56 rounded-xl border border-white/15 bg-[#12101c] p-3 text-[12px]">
-            <div className="text-white/45 mb-2">Net = gross \u2212 Angel entry+exit</div>
             {chargeRows.map(([k, v]) => (
               <div key={k} className="flex justify-between font-[family-name:var(--font-mono)]">
                 <span className="text-white/45">{k.replace(/_/g, " ")}</span>
@@ -270,36 +270,48 @@ export default function Home() {
         <section className={`border rounded-2xl p-3 ${call ? "panel-call" : "panel-put"}`}>
           <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/45">{call ? "CALL" : "PUT"} {L.strike}</div>
           <div className="font-[family-name:var(--font-mono)] text-[20px]">LTP {px(ltp)}</div>
-          <div className="text-[11px] text-white/45 font-[family-name:var(--font-mono)] mb-1">open {px(open)} \u00b7 bid {px(q?.bid)} \u00b7 ask {px(q?.ask)}</div>
+          <div className="text-[11px] text-white/45 font-[family-name:var(--font-mono)] mb-1">open {px(open)} · bid {px(q?.bid)} · ask {px(q?.ask)}</div>
           <AngelChart data={optBars} empty="Select strike" />
         </section>
       </div>
       <div className="flex flex-wrap items-end gap-x-3 gap-y-3 mb-4">
-        <Drop label="Expiry" value={L.expiry} onChange={(v) => setL({ expiry: v })} width="min-w-[8.5rem]">
-          {(market.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}
-        </Drop>
-        <Drop label="Strike" value={L.strike} onChange={(v) => setL({ strike: v })}>
-          {(market.strikes || []).filter((k) => k > 1000 && k < 100000).map((k) => <option key={k} value={String(k)}>{k}</option>)}
-        </Drop>
-        <Drop label="Type" value={L.option_type} onChange={(v) => setL({ option_type: v as "CE" | "PE" })} width="min-w-[4.5rem]">
-          <option>CE</option><option>PE</option>
-        </Drop>
-        <Drop label="Side" value={L.side} onChange={(v) => setL({ side: v as "LONG" | "SHORT" })} width="min-w-[5.5rem]">
-          <option>LONG</option><option>SHORT</option>
-        </Drop>
+        <Drop label="Expiry" value={L.expiry} onChange={(v) => setL({ expiry: v })} width="min-w-[8.5rem]">{(market.expiries || []).map((ex) => <option key={ex} value={ex}>{ex}</option>)}</Drop>
+        <Drop label="Strike" value={L.strike} onChange={(v) => setL({ strike: v })}>{(market.strikes || []).filter((k) => k > 1000 && k < 100000).map((k) => <option key={k} value={String(k)}>{k}</option>)}</Drop>
+        <Drop label="Type" value={L.option_type} onChange={(v) => setL({ option_type: v as "CE" | "PE" })} width="min-w-[4.5rem]"><option>CE</option><option>PE</option></Drop>
+        <Drop label="Side" value={L.side} onChange={(v) => setL({ side: v as "LONG" | "SHORT" })} width="min-w-[5.5rem]"><option>LONG</option><option>SHORT</option></Drop>
         <Field label="Lots" value={L.lots} onChange={(v) => setL({ lots: v })} w="w-16" />
-        <Field label="Entry" value={L.entry_price} onChange={(v) => setL({ entry_price: v })} hint="Premium you paid or received" />
-        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} hint="Target in rupees of book P&L, not premium." />
-        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} hint="Stop in rupees of book P&L you can lose, not premium." />
+        <Field label="Entry" value={L.entry_price} onChange={(v) => setL({ entry_price: v })} hint="Premium" />
+        <Field label="Target" value={L.target_net} onChange={(v) => setL({ target_net: v })} hint="Target in rupees" />
+        <Field label="Stop" value={L.stop_loss} onChange={(v) => setL({ stop_loss: v })} hint="Stop in rupees you can lose" />
         <button type="button" className="cta-gradient rounded-full px-5 py-2 text-[13px] font-medium" onClick={onAnalyze}>Analyze</button>
       </div>
       {error && <p className="text-[12px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
       {analysis && t0 && (
-        <section className="border border-white/10 rounded-2xl p-5 bg-white/[0.03] space-y-4 max-w-[560px]">
+        <section className="border border-white/10 rounded-2xl p-5 bg-white/[0.03] space-y-5 max-w-[560px]">
           <div className="font-[family-name:var(--font-mono)] text-[32px] tracking-wide" style={{ color: t0.state === "dead" ? "#C77A6E" : t0.state === "safe" || t0.state === "on_plan" ? "#7FC49A" : "#D6A25C" }}>
             {(t0.state || "").replace("_", " ").toUpperCase()}
           </div>
           <p className="text-[14px] text-white/65 leading-relaxed">{t0.state_reason}</p>
+          <div>
+            <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/35 mb-1">THETA</div>
+            <div className="font-[family-name:var(--font-mono)] text-[18px]">{t0.theta_so_far == null ? "\u2014" : rupee(t0.theta_so_far)}</div>
+            <div className="text-[12px] text-white/45">{rupee(t0.theta_per_hour || 0)} / hour</div>
+          </div>
+          <div>
+            <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/35 mb-1">IV \u00b7 NIFTY MOVE TO TARGET</div>
+            <div className="text-[12px] text-white/40 mb-2">ATM IV {market.iv_atm != null ? (Number(market.iv_atm) * 100).toFixed(1) + "%" : "model 15%"} · expected {t0.expected_move_pts?.toFixed?.(0)} pts</div>
+            {Object.entries(t0.points_to_target || {}).map(([k, v]) => (
+              <div key={k} className="flex justify-between font-[family-name:var(--font-mono)] text-[13px]">
+                <span className="text-white/45">{ivLabel(k)}</span>
+                <span>{v == null ? "\u2014" : `${v > 0 ? "+" : ""}${Number(v).toFixed(0)} pts`}</span>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div className="text-[10px] tracking-[0.14em] font-[family-name:var(--font-mono)] text-white/35 mb-1">OI WINDOW ±5</div>
+            <div className="text-[18px]">{(t0.oi?.bias || "neutral").toUpperCase()}</div>
+            <p className="text-[13px] text-white/55">{t0.oi?.reason}</p>
+          </div>
         </section>
       )}
     </main>
