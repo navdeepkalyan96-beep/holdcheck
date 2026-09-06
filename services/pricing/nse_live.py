@@ -1,4 +1,4 @@
-"""Fetch NSE index option-chain JSON (session cookie handshake)."""
+"""Fetch NSE index option-chain JSON."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ import time
 import requests
 
 NSE_HOME = "https://www.nseindia.com"
-CHAIN_URL = "https://www.nseindia.com/api/option-chain-indices"
+WARM_URLS = [
+    "https://www.nseindia.com/option-chain",
+    "https://www.nseindia.com/market-data/option-chain",
+]
+CHAIN_V3 = "https://www.nseindia.com/api/option-chain-v3"
+CHAIN_LEGACY = "https://www.nseindia.com/api/option-chain-indices"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -27,7 +32,11 @@ _state: dict = {"session": None, "at": 0.0}
 def _fresh_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(HEADERS)
-    s.get(NSE_HOME, timeout=12)
+    for url in WARM_URLS:
+        try:
+            s.get(url, timeout=12)
+        except requests.RequestException:
+            continue
     return s
 
 
@@ -35,7 +44,7 @@ def _get_session(force: bool = False) -> requests.Session:
     with _lock:
         now = time.time()
         sess = _state["session"]
-        if force or sess is None or now - _state["at"] > 300:
+        if force or sess is None or now - _state["at"] > 180:
             sess = _fresh_session()
             _state["session"] = sess
             _state["at"] = now
@@ -43,18 +52,47 @@ def _get_session(force: bool = False) -> requests.Session:
 
 
 def _parse_expiry(label: str) -> str:
-    return datetime.strptime(label, "%d-%b-%Y").date().isoformat()
+    return datetime.strptime(label.strip(), "%d-%b-%Y").date().isoformat()
+
+
+def _looks_like_chain(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    rec = payload.get("records") or payload.get("filtered") or {}
+    if not isinstance(rec, dict):
+        return False
+    return bool(rec.get("data") or rec.get("expiryDates"))
 
 
 def fetch_chain(symbol: str = "NIFTY") -> dict:
     s = _get_session()
-    r = s.get(CHAIN_URL, params={"symbol": symbol.upper()}, timeout=15)
-    ctype = r.headers.get("content-type") or ""
-    if r.status_code != 200 or "json" not in ctype:
-        s = _get_session(force=True)
-        r = s.get(CHAIN_URL, params={"symbol": symbol.upper()}, timeout=15)
-    r.raise_for_status()
-    return r.json()
+    attempts = [
+        (CHAIN_V3, {"type": "Indices", "symbol": symbol.upper()}),
+        (CHAIN_LEGACY, {"symbol": symbol.upper()}),
+    ]
+    last_err = "no response"
+    for url, params in attempts:
+        try:
+            r = s.get(url, params=params, timeout=20)
+        except requests.RequestException as e:
+            last_err = str(e)
+            continue
+        if r.status_code != 200:
+            last_err = f"{r.status_code} {url}"
+            s = _get_session(force=True)
+            continue
+        try:
+            payload = r.json()
+        except ValueError:
+            last_err = "non-JSON from NSE"
+            continue
+        if _looks_like_chain(payload):
+            return payload
+        last_err = "NSE returned empty chain (bot wall / cloud IP)"
+    raise RuntimeError(
+        f"{last_err}. NSE blocks most cloud hosts. Dropdowns still work; "
+        "live LTP needs an India IP or a broker feed."
+    )
 
 
 def list_expiries(payload: dict) -> list[str]:
@@ -62,7 +100,7 @@ def list_expiries(payload: dict) -> list[str]:
     out = []
     for lab in labels:
         try:
-            out.append(_parse_expiry(lab))
+            out.append(_parse_expiry(str(lab)))
         except ValueError:
             continue
     return out
@@ -95,7 +133,7 @@ def snapshot(symbol: str = "NIFTY", expiry_iso: str | None = None) -> dict:
     rows = []
     for item in records.get("data") or []:
         try:
-            exp = _parse_expiry(item.get("expiryDate") or "")
+            exp = _parse_expiry(str(item.get("expiryDate") or ""))
         except ValueError:
             continue
         if expiry_iso and exp != expiry_iso:
