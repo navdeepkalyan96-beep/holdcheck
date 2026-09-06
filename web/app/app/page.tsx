@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+type Candle = { t: string; o: number; h: number; l: number; c: number };
 type Quote = { ltp?: number | null; open?: number | null; bid?: number | null; ask?: number | null };
 type Market = {
   underlying?: number; expiry?: string; expiries?: string[]; strikes?: number[];
@@ -15,7 +16,6 @@ type Ticket = {
   points_to_target: Record<string, number | null>;
   oi: { bias: string; reason: string };
   state: string; state_reason: string;
-  live?: { mark?: number | null; ltp?: number | null; open?: number | null };
 };
 type Leg = {
   expiry: string; strike: string; option_type: "CE" | "PE"; side: "LONG" | "SHORT";
@@ -40,27 +40,61 @@ function glow(n: number) {
   return "";
 }
 
-function tvSymbolForOption(expiry: string, strike: string, type: "CE" | "PE") {
-  const [y, m, d] = (expiry || "").split("-");
-  if (!y || !strike) return "NSE:NIFTY";
-  const yy = y.slice(2);
-  const cp = type === "CE" ? "C" : "P";
-  return `NSE:NIFTY${yy}${m}${d}${cp}${strike}`;
-}
-
-function TradingViewChart({ symbol }: { symbol: string }) {
+function TradingViewSpot() {
+  // INDEX:NIFTY is licensed for the free embed. NSE:NIFTY / NFO options are TV-app only.
   const src =
     "https://s.tradingview.com/widgetembed/?symbol=" +
-    encodeURIComponent(symbol) +
+    encodeURIComponent("INDEX:NIFTY") +
     "&interval=5&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=0d0b1a&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&hideideas=1&locale=en&allow_symbol_change=1";
   return (
     <iframe
-      title={symbol}
+      title="NIFTY"
       src={src}
       className="w-full h-[320px] rounded-lg border-0 bg-black"
       referrerPolicy="no-referrer-when-downgrade"
       allow="fullscreen"
     />
+  );
+}
+
+function ZoomCandles({ data }: { data: Candle[] }) {
+  const [span, setSpan] = useState(80);
+  const view = useMemo(() => data.slice(-Math.max(20, span)), [data, span]);
+  if (!data.length) {
+    return <div className="h-[220px] flex items-center justify-center text-[12px] text-white/40">no Angel candles (weekend / token)</div>;
+  }
+  const w = 360, h = 220, pad = 10;
+  const max = Math.max(...view.map((d) => d.h));
+  const min = Math.min(...view.map((d) => d.l));
+  const rng = max - min || 1;
+  const bw = Math.max(2, (w - pad * 2) / view.length - 1);
+  const y = (v: number) => pad + ((max - v) / rng) * (h - pad * 2);
+  return (
+    <div>
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="w-full h-[220px]"
+        onWheel={(e) => {
+          e.preventDefault();
+          setSpan((s) => Math.min(data.length, Math.max(20, s + (e.deltaY > 0 ? 8 : -8))));
+        }}
+      >
+        {view.map((d, i) => {
+          const x = pad + i * ((w - pad * 2) / view.length) + bw / 2;
+          const color = d.c >= d.o ? "#3dff8a" : "#ff5c6a";
+          return (
+            <g key={i}>
+              <line x1={x} x2={x} y1={y(d.h)} y2={y(d.l)} stroke={color} strokeWidth="1" />
+              <rect x={x - bw / 2} y={y(Math.max(d.o, d.c))} width={bw} height={Math.max(1, Math.abs(y(d.o) - y(d.c)))} fill={color} />
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex gap-2 justify-end text-[11px]">
+        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.max(20, s - 15))}>zoom +</button>
+        <button type="button" className="border border-white/20 rounded px-2 py-0.5" onClick={() => setSpan((s) => Math.min(data.length, s + 15))}>zoom −</button>
+      </div>
+    </div>
   );
 }
 
@@ -71,6 +105,7 @@ export default function Home() {
   }]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [market, setMarket] = useState<Market>({});
+  const [optBars, setOptBars] = useState<Candle[]>([]);
   const [analysis, setAnalysis] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<string | null>(null);
@@ -89,6 +124,13 @@ export default function Home() {
       expiry: x.expiry || m.expiry || "",
       strike: x.strike || (m.atm_strike != null ? String(m.atm_strike) : ""),
     })));
+
+    const LL = legsRef.current[0];
+    if (LL?.expiry && LL?.strike) {
+      const cr = await fetch(`${API_URL}/market/candles?kind=option&expiry=${LL.expiry}&strike=${LL.strike}&option_type=${LL.option_type}`);
+      const cj = await cr.json().catch(() => ({ candles: [] }));
+      setOptBars(cj.candles || []);
+    }
 
     const positions = legsRef.current.filter((p) => p.strike && p.entry_price && p.expiry).map((p) => ({
       expiry: p.expiry, strike: Number(p.strike), option_type: p.option_type, side: p.side,
@@ -128,7 +170,6 @@ export default function Home() {
   const mark = q?.open ?? q?.ltp;
   const call = L.option_type === "CE";
   const t0 = tickets[0];
-  const optSymbol = tvSymbolForOption(L.expiry, L.strike, L.option_type);
 
   return (
     <main className="flex-1 px-3 pt-16 pb-10 max-w-[1100px] mx-auto w-full">
@@ -150,14 +191,14 @@ export default function Home() {
 
       <div className="grid md:grid-cols-2 gap-3 mb-4">
         <section className="border border-white/10 rounded-xl p-3 bg-white/[0.03]">
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT</div>
+          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT · TradingView INDEX:NIFTY</div>
           <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">{market.underlying ? market.underlying.toFixed(2) : "—"}</div>
-          <TradingViewChart symbol="NSE:NIFTY" />
+          <TradingViewSpot />
         </section>
         <section className={`border rounded-xl p-3 ${call ? "panel-call" : "panel-put"}`}>
-          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/50">{call ? "CALL" : "PUT"} · {L.strike || "strike"}</div>
+          <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/50">{call ? "CALL" : "PUT"} · {L.strike || "strike"} · Angel candles</div>
           <div className="font-[family-name:var(--font-mono)] text-[22px] mb-1">mark {px(mark)} <span className="text-[12px] text-white/50">open {px(q?.open)} · ltp {px(q?.ltp)}</span></div>
-          <TradingViewChart symbol={optSymbol} />
+          <ZoomCandles data={optBars} />
         </section>
       </div>
 
