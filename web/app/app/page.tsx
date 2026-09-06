@@ -4,30 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-function upcomingTuesdays(n = 10): string[] {
-  const out: string[] = [];
-  const d = new Date();
-  d.setHours(12, 0, 0, 0);
-  for (let i = 0; i < 80 && out.length < n; i++) {
-    if (d.getDay() === 2) out.push(d.toISOString().slice(0, 10));
-    d.setDate(d.getDate() + 1);
-  }
-  return out;
-}
-
-function strikeLadder(center = 24800, span = 2000, step = 50): number[] {
-  const s: number[] = [];
-  for (let k = center - span; k <= center + span; k += step) s.push(k);
-  return s;
-}
-
-const FALLBACK: Market = {
-  expiries: upcomingTuesdays(),
-  strikes: strikeLadder(),
-  atm_strike: 24800,
-  expiry: upcomingTuesdays()[0],
+type Quote = { ltp?: number | null; open?: number | null; bid?: number | null; ask?: number | null };
+type Market = {
+  underlying?: number;
+  expiry?: string;
+  expiries?: string[];
+  strikes?: number[];
+  atm_strike?: number;
+  quotes?: Record<string, Quote>;
+  asof?: string;
 };
-
 type Ticket = {
   instrument: string;
   expiry: string;
@@ -36,72 +22,33 @@ type Ticket = {
   entry_price: number;
   gross_pnl: number;
   net_pnl: number;
-  greeks: { delta: number; gamma: number; theta_per_hour: number; vega_per_vol_point: number };
   theta_per_hour: number;
-  hours_open: number | null;
   theta_so_far: number | null;
   expected_move_pts: number;
-  plan: { target_net?: number; stop_loss?: number | null; is_inferred?: boolean };
+  plan: { target_net?: number; stop_loss?: number | null };
   points_to_target: Record<string, number | null>;
-  oi: { bias: string; ce_oi_change: number; pe_oi_change: number; window: string; reason: string };
+  oi: { bias: string; reason: string; window: string };
   state: string;
   state_reason: string;
+  live?: { spot?: number; open?: number | null; ltp?: number | null; mark?: number | null };
 };
-
-type Market = {
-  underlying?: number;
-  iv_atm?: number;
-  expiry?: string;
-  asof?: string;
-  expiries?: string[];
-  strikes?: number[];
-  atm_strike?: number;
-};
-
 type Leg = {
-  expiry: string;
-  strike: string;
-  option_type: "CE" | "PE";
-  side: "LONG" | "SHORT";
-  lots: string;
-  lot_size: string;
-  entry_price: string;
-  target_net: string;
-  stop_loss: string;
-  hours_open: string;
+  expiry: string; strike: string; option_type: "CE" | "PE"; side: "LONG" | "SHORT";
+  lots: string; lot_size: string; entry_price: string; target_net: string; stop_loss: string; hours_open: string;
 };
 
 const emptyLeg = (): Leg => ({
-  expiry: FALLBACK.expiry || "",
-  strike: FALLBACK.atm_strike != null ? String(FALLBACK.atm_strike) : "",
-  option_type: "CE",
-  side: "LONG",
-  lots: "1",
-  lot_size: "65",
-  entry_price: "",
-  target_net: "",
-  stop_loss: "",
-  hours_open: "2",
+  expiry: "", strike: "", option_type: "CE", side: "LONG",
+  lots: "1", lot_size: "65", entry_price: "", target_net: "", stop_loss: "", hours_open: "2",
 });
-
-const STATE_STYLE: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  safe: { label: "SAFE · ON PLAN", color: "#7FC49A", bg: "#12211A", border: "#2C4A3A" },
-  on_plan: { label: "SAFE · ON PLAN", color: "#7FC49A", bg: "#12211A", border: "#2C4A3A" },
-  at_risk: { label: "AT RISK", color: "#D6A25C", bg: "#241E12", border: "#4A3D26" },
-  hope: { label: "AT RISK", color: "#D6A25C", bg: "#241E12", border: "#4A3D26" },
-  fear: { label: "AT RISK", color: "#D6A25C", bg: "#241E12", border: "#4A3D26" },
-  dead: { label: "DEAD", color: "#C77A6E", bg: "#241614", border: "#4A2E2A" },
-};
-
-const IV_LABEL: Record<string, string> = {
-  iv_minus_2pct: "IV −2%",
-  iv_unchanged: "IV unchanged",
-  iv_plus_2pct: "IV +2%",
-};
 
 function rupee(n: number) {
   const sign = n < 0 ? "-" : n > 0 ? "+" : "";
   return `${sign}₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+function px(n: number | null | undefined) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return Number(n).toFixed(2);
 }
 function pnlColor(n: number) {
   if (n > 0) return "#7FC49A";
@@ -109,142 +56,58 @@ function pnlColor(n: number) {
   return "#C4C8CD";
 }
 
-function normalizeTicket(raw: Record<string, unknown>): Ticket {
-  const net = Number(raw.net_pnl ?? raw.net_if_exited_now ?? 0);
-  const req = (raw.points_to_target as Ticket["points_to_target"]) ||
-    (raw.required_move_pts as Ticket["points_to_target"]) || {};
-  const oi = (raw.oi as Ticket["oi"]) || {
-    bias: "neutral", ce_oi_change: 0, pe_oi_change: 0, window: "±5", reason: "",
-  };
-  const greeks = (raw.greeks as Ticket["greeks"]) || {
-    delta: 0, gamma: 0, theta_per_hour: Number(raw.theta_per_hour ?? 0), vega_per_vol_point: 0,
-  };
-  return {
-    instrument: String(raw.instrument ?? ""),
-    expiry: String(raw.expiry ?? ""),
-    lots: Number(raw.lots ?? 0),
-    side: raw.side === "SHORT" ? "SHORT" : "LONG",
-    entry_price: Number(raw.entry_price ?? 0),
-    gross_pnl: Number(raw.gross_pnl ?? net),
-    net_pnl: net,
-    greeks,
-    theta_per_hour: Number(raw.theta_per_hour ?? 0),
-    hours_open: raw.hours_open == null ? null : Number(raw.hours_open),
-    theta_so_far: raw.theta_so_far == null ? null : Number(raw.theta_so_far),
-    expected_move_pts: Number(raw.expected_move_pts ?? 0),
-    plan: (raw.plan as Ticket["plan"]) || {},
-    points_to_target: req,
-    oi,
-    state: String(raw.state ?? ""),
-    state_reason: String(raw.state_reason ?? ""),
-  };
-}
-
-function StateChip({ state }: { state: string }) {
-  const s = STATE_STYLE[state] ?? { label: state.toUpperCase(), color: "#9AA1AB", bg: "#1A1D20", border: "#2A2E32" };
-  return (
-    <span className="font-[family-name:var(--font-mono)] text-[11px] tracking-wide px-2 py-1 border" style={{ color: s.color, backgroundColor: s.bg, borderColor: s.border }}>
-      {s.label}
-    </span>
-  );
-}
-
-function TicketCard({ ticket }: { ticket: Ticket }) {
-  const [open, setOpen] = useState(false);
-  const oiColor = ticket.oi.bias === "bullish" ? "#7FC49A" : ticket.oi.bias === "bearish" ? "#C77A6E" : "#D6A25C";
-  return (
-    <div className="border border-white/10 bg-white/[0.03] rounded-xl overflow-hidden">
-      <button onClick={() => setOpen(!open)} className="w-full text-left p-4 flex items-center justify-between gap-3">
-        <div>
-          <div className="font-medium text-[15px]">{ticket.instrument} <span className="text-[11px] text-white/45 font-[family-name:var(--font-mono)]">{ticket.side} · {ticket.lots}L</span></div>
-          <div className="text-[11px] text-white/40">gross {rupee(ticket.gross_pnl)} · net {rupee(ticket.net_pnl)}</div>
-        </div>
-        <StateChip state={ticket.state} />
-      </button>
-      {open && (
-        <div className="px-4 pb-5 border-t border-white/10 pt-4 space-y-4 text-[13px]">
-          <p className="text-white/70">{ticket.state_reason}.</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS</div>
-              <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.gross_pnl) }}>{rupee(ticket.gross_pnl)}</div>
-            </div>
-            <div>
-              <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET TICK</div>
-              <div className="font-[family-name:var(--font-mono)]" style={{ color: pnlColor(ticket.net_pnl) }}>{rupee(ticket.net_pnl)}</div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function Home() {
   const [legs, setLegs] = useState<Leg[]>([emptyLeg()]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [market, setMarket] = useState<Market>(FALLBACK);
+  const [market, setMarket] = useState<Market>({});
   const [live, setLive] = useState(true);
+  const [analysis, setAnalysis] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tickAt, setTickAt] = useState<string | null>(null);
   const legsRef = useRef(legs);
   legsRef.current = legs;
 
-  const applyMarket = useCallback((m: Market, seedLeg: boolean) => {
-    const merged: Market = {
-      ...FALLBACK,
-      ...m,
-      expiries: (m.expiries && m.expiries.length ? m.expiries : FALLBACK.expiries),
-      strikes: (Array.isArray(m.strikes) && m.strikes.length > 4 ? m.strikes : FALLBACK.strikes),
-    };
-    setMarket(merged);
-    if (!seedLeg) return;
-    const expiry = merged.expiry || merged.expiries?.[0] || "";
-    const strike = merged.atm_strike != null ? String(merged.atm_strike) : String(merged.strikes?.[Math.floor((merged.strikes?.length || 1) / 2)] || "");
-    setLegs((prev) => prev.map((l, i) => (i === 0 ? { ...l, expiry: l.expiry || expiry, strike: l.strike || strike } : l)));
+  const loadMarket = useCallback(async (expiry?: string) => {
+    const url = expiry ? `${API_URL}/market/nifty?expiry=${encodeURIComponent(expiry)}` : `${API_URL}/market/nifty`;
+    const r = await fetch(url);
+    const m = await r.json();
+    if (!r.ok) throw new Error(typeof m.detail === "string" ? m.detail : `HTTP ${r.status}`);
+    setMarket(m);
+    setLegs((prev) => prev.map((l, i) => {
+      if (i !== 0) return l;
+      return {
+        ...l,
+        expiry: l.expiry || m.expiry || "",
+        strike: l.strike || (m.atm_strike != null ? String(m.atm_strike) : ""),
+      };
+    }));
+    return m as Market;
   }, []);
 
-  const loadMarket = useCallback(async (expiry?: string, seed = false) => {
-    const url = expiry ? `${API_URL}/market/nifty?expiry=${encodeURIComponent(expiry)}` : `${API_URL}/market/nifty`;
-    try {
-      const r = await fetch(url);
-      const m = await r.json();
-      if (!r.ok) throw new Error(typeof m.detail === "string" ? m.detail : `HTTP ${r.status}`);
-      applyMarket(m, seed);
-      return m as Market;
-    } catch (e) {
-      applyMarket(FALLBACK, seed);
-      setError(
-        `Chain list using local Nifty ladder. Redeploy pricing on Render from GitHub main so /market/nifty exists. (${e instanceof Error ? e.message : "fail"})`,
-      );
-      return FALLBACK;
-    }
-  }, [applyMarket]);
-
   useEffect(() => {
-    loadMarket(undefined, true);
+    loadMarket().catch((e) => setError(String(e.message || e)));
   }, [loadMarket]);
 
-  const refresh = useCallback(async () => {
+  const refreshBook = useCallback(async () => {
     const current = legsRef.current;
-    const positions = current
-      .filter((l) => l.strike && l.entry_price && l.expiry)
-      .map((l) => ({
-        expiry: l.expiry,
-        strike: Number(l.strike),
-        option_type: l.option_type,
-        side: l.side,
-        lots: Number(l.lots),
-        lot_size: Number(l.lot_size || 65),
-        entry_price: Number(l.entry_price),
-        target_net: l.target_net ? Number(l.target_net) : null,
-        stop_loss: l.stop_loss ? Number(l.stop_loss) : null,
-        hours_open: l.hours_open ? Number(l.hours_open) : null,
-      }));
-    if (!positions.length) return;
-    setLoading(true);
+    const positions = current.filter((l) => l.strike && l.entry_price && l.expiry).map((l) => ({
+      expiry: l.expiry,
+      strike: Number(l.strike),
+      option_type: l.option_type,
+      side: l.side,
+      lots: Number(l.lots),
+      lot_size: Number(l.lot_size || 65),
+      entry_price: Number(l.entry_price),
+      target_net: l.target_net ? Number(l.target_net) : null,
+      stop_loss: l.stop_loss ? Number(l.stop_loss) : null,
+      hours_open: l.hours_open ? Number(l.hours_open) : null,
+    }));
     try {
+      const m = await loadMarket(positions[0]?.expiry || current[0]?.expiry || undefined);
+      setTickAt(new Date().toLocaleTimeString("en-IN", { hour12: false }));
+      if (!positions.length) return;
+      setLoading(true);
       const res = await fetch(`${API_URL}/tickets/live`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -252,56 +115,76 @@ export default function Home() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
-      setTickets((data.tickets || []).map(normalizeTicket));
-      if (data.market) applyMarket(data.market, false);
-      setTickAt(new Date().toLocaleTimeString("en-IN", { hour12: false }));
+      setTickets(data.tickets || []);
+      if (data.market) setMarket(data.market);
       setError(null);
+      void m;
     } catch (e) {
-      setError(
-        (e instanceof Error ? e.message : "Live book failed") +
-          " — Render is still API v0.1. Redeploy the pricing service from GitHub main.",
-      );
+      setError(e instanceof Error ? e.message : "tick failed");
     } finally {
       setLoading(false);
     }
-  }, [applyMarket]);
+  }, [loadMarket]);
 
   useEffect(() => {
     if (!live) return;
-    const id = setInterval(() => refresh(), 15000);
+    refreshBook();
+    const id = setInterval(refreshBook, 5000);
     return () => clearInterval(id);
-  }, [live, refresh]);
+  }, [live, refreshBook]);
 
-  const gross = tickets.reduce((s, t) => s + (Number(t.gross_pnl) || 0), 0);
-  const net = tickets.reduce((s, t) => s + (Number(t.net_pnl) || 0), 0);
+  const gross = tickets.reduce((s, t) => s + Number(t.gross_pnl || 0), 0);
+  const net = tickets.reduce((s, t) => s + Number(t.net_pnl || 0), 0);
   const hasBook = tickets.length > 0;
-  const strikeList = market?.strikes?.length ? market.strikes : FALLBACK.strikes || [];
-  const expiryList = market?.expiries?.length ? market.expiries : FALLBACK.expiries || [];
+  const expiryList = market.expiries || [];
+  const strikeList = (market.strikes || []).filter((k) => k > 1000 && k < 100000);
+  const first = legs[0];
+  const q = market.quotes?.[`${first?.strike}${first?.option_type}`];
+  const strikeMark = q?.open ?? q?.ltp ?? tickets[0]?.live?.mark;
+
+  function analyze() {
+    setAnalysis(true);
+    refreshBook();
+  }
 
   return (
     <main className="flex-1 flex flex-col items-center px-4 pt-20 pb-12">
       <div className="w-full max-w-[640px]">
-        <header className="mb-4">
-          <div className="flex items-center justify-between gap-3">
+        <header className="mb-4 flex items-start justify-between gap-3">
+          <div>
             <h1 className="font-medium text-[22px]">Live book</h1>
-            <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">
-              {live ? "LIVE" : "PAUSED"}{tickAt ? ` · ${tickAt}` : ""}
-            </span>
+            <p className="text-[12px] font-[family-name:var(--font-mono)] text-white/55 mt-1">
+              NIFTY SPOT {market.underlying ? market.underlying.toFixed(2) : "—"}
+              {tickAt ? ` · ${tickAt}` : ""}{live ? " · TICK 5s" : " · PAUSED"}
+            </p>
           </div>
+          <span className="text-[11px] text-white/40 font-[family-name:var(--font-mono)]">{loading ? "…" : live ? "LIVE" : "PAUSED"}</span>
         </header>
 
-        <div className="grid grid-cols-2 gap-3 mb-5">
+        <div className="grid grid-cols-2 gap-3 mb-3">
           <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
             <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">GROSS PNL</div>
-            <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(hasBook ? gross : 0) }}>
+            <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums" style={{ color: pnlColor(hasBook ? gross : 0) }}>
               {hasBook ? rupee(gross) : "—"}
             </div>
           </div>
           <div className="border border-white/10 rounded-xl p-4 bg-white/[0.03]">
             <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NET PNL · TICK</div>
-            <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums mt-1" style={{ color: pnlColor(hasBook ? net : 0) }}>
+            <div className="font-[family-name:var(--font-mono)] text-[26px] tabular-nums" style={{ color: pnlColor(hasBook ? net : 0) }}>
               {hasBook ? rupee(net) : "—"}
             </div>
+          </div>
+        </div>
+
+        <div className="border border-white/10 rounded-xl p-3 mb-4 grid grid-cols-2 gap-3 text-[13px]">
+          <div>
+            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">NIFTY SPOT</div>
+            <div className="font-[family-name:var(--font-mono)] text-[18px]">{market.underlying ? market.underlying.toFixed(2) : "—"}</div>
+          </div>
+          <div>
+            <div className="text-[11px] font-[family-name:var(--font-mono)] text-white/40">STRIKE MARK · OPEN / LTP</div>
+            <div className="font-[family-name:var(--font-mono)] text-[18px]">{px(strikeMark)}</div>
+            <div className="text-[11px] text-white/40">open {px(q?.open)} · ltp {px(q?.ltp)}</div>
           </div>
         </div>
 
@@ -309,26 +192,26 @@ export default function Home() {
           {legs.map((l, i) => (
             <div key={i} className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-white/10 rounded-xl p-3">
               <label className="text-[11px] text-white/40">Expiry
-                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
-                  value={l.expiry} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, expiry: e.target.value } : x))}>
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.expiry}
+                  onChange={(e) => { const v = e.target.value; setLegs(legs.map((x, j) => j === i ? { ...x, expiry: v } : x)); loadMarket(v).catch(() => {}); }}>
                   {expiryList.map((ex) => <option key={ex} value={ex}>{ex}</option>)}
                 </select>
               </label>
               <label className="text-[11px] text-white/40">Strike
-                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]"
-                  value={l.strike} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, strike: e.target.value } : x))}>
-                  {strikeList.map((k) => (
-                    <option key={k} value={String(k)}>{k}{k === market?.atm_strike ? " ATM" : ""}</option>
-                  ))}
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.strike}
+                  onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, strike: e.target.value } : x))}>
+                  {strikeList.map((k) => <option key={k} value={String(k)}>{k}{k === market.atm_strike ? " ATM" : ""}</option>)}
                 </select>
               </label>
               <label className="text-[11px] text-white/40">Type
-                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.option_type} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, option_type: e.target.value as "CE" | "PE" } : x))}>
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.option_type}
+                  onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, option_type: e.target.value as "CE" | "PE" } : x))}>
                   <option>CE</option><option>PE</option>
                 </select>
               </label>
               <label className="text-[11px] text-white/40">Side
-                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.side} onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, side: e.target.value as "LONG" | "SHORT" } : x))}>
+                <select className="w-full bg-[#07051a] border border-white/15 rounded px-2 py-1 text-white text-[13px]" value={l.side}
+                  onChange={(e) => setLegs(legs.map((x, j) => j === i ? { ...x, side: e.target.value as "LONG" | "SHORT" } : x))}>
                   <option>LONG</option><option>SHORT</option>
                 </select>
               </label>
@@ -350,21 +233,40 @@ export default function Home() {
 
         <div className="flex flex-wrap gap-2 mb-4">
           <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => setLegs([...legs, emptyLeg()])}>+ leg</button>
-          <button type="button" className="text-[13px] border border-white/20 rounded-full px-3 py-1.5" onClick={() => refresh()} disabled={loading}>{loading ? "updating…" : "Refresh"}</button>
-          <button type="button" className={`text-[13px] rounded-full px-3 py-1.5 ${live ? "cta-gradient text-white" : "border border-white/20"}`} onClick={() => setLive((v) => !v)}>
-            {live ? "Live on · 15s" : "Paused"}
+          <button type="button" className="cta-gradient text-white text-[13px] rounded-full px-4 py-1.5" onClick={analyze}>Analyze</button>
+          <button type="button" className={`text-[13px] rounded-full px-3 py-1.5 ${live ? "border border-white/20" : "border border-white/20"}`} onClick={() => setLive((v) => !v)}>
+            {live ? "Pause tick" : "Resume tick"}
           </button>
         </div>
 
         {error && <p className="text-[13px] text-[#C77A6E] mb-3 font-[family-name:var(--font-mono)]">{error}</p>}
+        <p className="text-[12px] text-white/45 mb-4">Type entry to start Gross/Net ticking. Analyze opens state, theta, points-to-target and OI.</p>
 
-        {tickets.length > 0 && (
-          <div className="space-y-2">{tickets.map((t, i) => <TicketCard key={i} ticket={t} />)}</div>
-        )}
-
-        <footer className="mt-10 pt-6 border-t border-white/10 text-[11px] text-white/35">
-          API {API_URL}. If docs still show v0.1.0, redeploy the Render service from this repo's main branch (root or services/pricing).
-        </footer>
+        {tickets.map((t, i) => (
+          <div key={i} className="border border-white/10 rounded-xl p-4 mb-2 bg-white/[0.03]">
+            <div className="flex justify-between gap-3">
+              <div>
+                <div className="font-medium">{t.instrument} <span className="text-[11px] text-white/45">{t.side} · {t.lots}L</span></div>
+                <div className="text-[12px] text-white/45 font-[family-name:var(--font-mono)]">mark {px(t.live?.mark)} · gross {rupee(t.gross_pnl)} · net {rupee(t.net_pnl)}</div>
+              </div>
+              <span className="text-[11px] font-[family-name:var(--font-mono)] text-white/60 self-start">{(t.state || "").toUpperCase()}</span>
+            </div>
+            {analysis && (
+              <div className="mt-3 pt-3 border-t border-white/10 space-y-2 text-[13px] text-white/70">
+                <p>{t.state_reason}</p>
+                <p>Theta so far {t.theta_so_far == null ? "—" : rupee(t.theta_so_far)} · {rupee(t.theta_per_hour)}/h</p>
+                <p>Expected move {t.expected_move_pts?.toFixed?.(0)} pts</p>
+                {Object.entries(t.points_to_target || {}).map(([k, v]) => (
+                  <div key={k} className="flex justify-between font-[family-name:var(--font-mono)] text-[12px]">
+                    <span className="text-white/40">{k.replace(/_/g, " ")}</span>
+                    <span>{v == null ? "unreachable" : `${v > 0 ? "+" : ""}${Number(v).toFixed(0)} pts`}</span>
+                  </div>
+                ))}
+                <p>OI {(t.oi?.bias || "neutral").toUpperCase()} — {t.oi?.reason}</p>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </main>
   );
