@@ -8,7 +8,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [err, setErr] = useState<string | None>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
