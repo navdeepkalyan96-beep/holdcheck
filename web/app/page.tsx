@@ -35,24 +35,24 @@ const STEPS = [
   {
     n: "01",
     title: "Enter the open legs",
-    body: "Expiry, strike, CE or PE, side, lots, entry, target and stop. Quotes are not typed — they come off the live NIFTY chain.",
+    body: "Expiry, strike, CE or PE, side, lots, entry, target and stop. Quotes come off the live chain.",
   },
   {
     n: "02",
     title: "Start live",
-    body: "The book refreshes about every 15 seconds: bid/ask, ATM IV, straddle, OI window. Nothing is stored.",
+    body: "The book refreshes on the Angel tick: bid/ask, implied IV, OI window. Nothing is stored.",
   },
   {
     n: "03",
     title: "Read Gross, Net, and state",
-    body: "Gross is LTP. Net is tickwise exit after charges. Analysis is theta so far, points to target at IV −2% / 0 / +2%, OI tilt, and Safe / At risk / Dead.",
+    body: "Gross is LTP. Net is exit after charges. Hold adds theta, required move, OI, and Safe / At risk / Dead.",
   },
 ];
 
 const STATES = [
-  { name: "SAFE", tone: "success" as const, meaning: "Required or adverse move ≤ expected move. Stop not hit. Model life ≥ 30 min." },
-  { name: "AT RISK", tone: "warning" as const, meaning: "Plan asks more than the straddle is pricing. Stop not yet hit." },
-  { name: "DEAD", tone: "danger" as const, meaning: "Stop hit, or required > 2× expected, or < 30 min of model life." },
+  { name: "SAFE", tone: "success" as const, meaning: "Greeks and OI are not fighting the plan. Stop not hit." },
+  { name: "AT RISK", tone: "warning" as const, meaning: "IV, theta, or OI is pressing the hold. Stop not yet hit." },
+  { name: "DEAD", tone: "danger" as const, meaning: "Stop hit, or near expiry + high theta + IV crash + low delta." },
 ];
 
 export default function LandingPage() {
@@ -61,7 +61,7 @@ export default function LandingPage() {
       <section className="hero-gradient relative min-h-[92vh] flex flex-col items-center justify-center px-6 text-center overflow-hidden">
         <div className="max-w-[920px] mx-auto pt-10">
           <p className="font-[family-name:var(--font-mono)] text-[11px] tracking-[0.22em] uppercase text-white/55 mb-6">
-            Nifty options · live chain · estimates, not advice
+            Nifty options · live book · estimates, not advice
           </p>
           <h1 className="text-white font-[family-name:var(--font-display)] font-normal text-[34px] sm:text-[50px] lg:text-[58px] leading-[1.12] tracking-tight">
             Your broker&apos;s MTM isn&apos;t what you&apos;ll take
@@ -69,14 +69,13 @@ export default function LandingPage() {
           </h1>
           <p className="mt-7 text-white/88 text-[17px] sm:text-[20px] leading-relaxed max-w-[780px] mx-auto">
             Live bid or ask, charges and theta, next to what this expiry is already pricing.
-            Cold numbers. No file upload.
           </p>
           <div className="mt-12 flex flex-wrap items-center justify-center gap-3">
-            <Link href="/app" className="cta-gradient inline-flex items-center justify-center min-w-[220px] px-8 py-3.5 rounded-full text-white text-[16px] font-medium">
+            <Link href="/app" className="cta-gradient inline-flex items-center justify-center min-w-[200px] px-8 py-3.5 rounded-full text-white text-[16px] font-medium">
               Open live book
             </Link>
-            <Link href="/#how-it-works" className="inline-flex items-center justify-center min-w-[180px] px-8 py-3.5 rounded-full text-white text-[16px] border border-white/25">
-              How it works
+            <Link href="/pricing" className="inline-flex items-center justify-center min-w-[160px] px-8 py-3.5 rounded-full text-white text-[16px] border border-white/25">
+              Pricing
             </Link>
           </div>
         </div>
@@ -107,8 +106,27 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
-          <Link href="/app" className="cta-gradient inline-flex mt-10 items-center justify-center px-7 py-3 rounded-full text-white text-[14px] font-medium">
-            Open live book
+        </section>
+
+        <section id="pricing" className="max-w-[880px] mx-auto px-5 pt-20">
+          <h2 className="text-[26px] sm:text-[32px] leading-tight font-medium mb-3">Two desks</h2>
+          <p className="text-[14px] text-white/55 mb-8">Free is the tick. Hold is the analysis.</p>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-white/12 p-6">
+              <p className="font-[family-name:var(--font-mono)] text-[11px] tracking-[0.16em] uppercase text-white/40">Free</p>
+              <p className="text-[22px] mt-2">Book</p>
+              <p className="font-[family-name:var(--font-mono)] text-[28px] mt-2">₹0</p>
+              <p className="text-[13px] text-white/55 mt-3">Gross + Net after charges. Spot and strike quotes.</p>
+            </div>
+            <div className="rounded-2xl border border-[#7b8cff]/35 p-6 bg-[#16128a]/20">
+              <p className="font-[family-name:var(--font-mono)] text-[11px] tracking-[0.16em] uppercase text-[#9b6dff]">Paid</p>
+              <p className="text-[22px] mt-2">Hold</p>
+              <p className="font-[family-name:var(--font-mono)] text-[28px] mt-2">₹249<span className="text-[14px] text-white/40"> / mo</span></p>
+              <p className="text-[13px] text-white/55 mt-3">State, IV, theta, OI, required move, charge stack.</p>
+            </div>
+          </div>
+          <Link href="/pricing" className="cta-gradient inline-flex mt-8 items-center justify-center px-7 py-3 rounded-full text-white text-[14px] font-medium">
+            Full pricing
           </Link>
         </section>
 
@@ -126,7 +144,7 @@ export default function LandingPage() {
 
         <footer className="max-w-[880px] mx-auto px-5 pb-12 border-t border-white/10 pt-8">
           <p className="text-[12px] text-white/40 leading-relaxed max-w-[720px]">
-            Live quotes from the NSE index option chain. Estimates only. Not advice. HoldCheck does not place orders.
+            Live quotes via Angel One. Estimates only. Not advice. HoldCheck does not place orders.
           </p>
         </footer>
       </div>

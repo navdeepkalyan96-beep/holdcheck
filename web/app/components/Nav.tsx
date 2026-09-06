@@ -10,11 +10,11 @@ export default function Nav() {
             HoldCheck
           </span>
         </Link>
-        <div className="flex items-center gap-5">
-          <Link href="/#how-it-works" className="hidden sm:inline text-[13px] text-white/70 hover:text-white transition-colors">
-            How it works
+        <div className="flex items-center gap-4 sm:gap-5">
+          <Link href="/#how-it-works" className="text-[13px] text-white/70 hover:text-white transition-colors">
+            How
           </Link>
-          <Link href="/pricing" className="hidden sm:inline text-[13px] text-white/70 hover:text-white transition-colors">
+          <Link href="/pricing" className="text-[13px] text-white/70 hover:text-white transition-colors">
             Pricing
           </Link>
           <Link
