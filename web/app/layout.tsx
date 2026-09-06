@@ -3,9 +3,9 @@ import Nav from "./components/Nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "HoldCheck — know when to hold",
+  title: "HoldCheck — trade management for options",
   description:
-    "Live net P&L after charges for Nifty options. Hold hygiene, not another option chain.",
+    "Hold or exit the open Nifty option with a live state: Safe, At risk, Dead. Estimates only, not advice.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

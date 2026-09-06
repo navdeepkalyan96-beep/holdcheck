@@ -11,7 +11,7 @@ export default function Nav() {
               HoldCheck
             </span>
             <span className="mt-1 font-[family-name:var(--font-mono)] text-[10px] sm:text-[11px] tracking-[0.14em] uppercase text-white/45">
-              Net rupees. Then decide.
+              Trade management for the open lot
             </span>
           </span>
         </Link>
