@@ -116,6 +116,14 @@ def _parse_expiry(raw: str) -> str | None:
     return None
 
 
+def _strike(row: dict) -> float:
+    k = float(row.get("strike") or 0)
+    # Angel master often stores NFO strikes in paise (2480000 = 24800)
+    if k >= 100000:
+        k = k / 100.0
+    return k
+
+
 def _opt_type(row: dict) -> str | None:
     sym = str(row.get("symbol") or row.get("tradingsymbol") or "").upper()
     if sym.endswith("CE"):
@@ -140,6 +148,17 @@ def _spot() -> float:
         return 0.0
 
 
+def _px(q: dict, *keys):
+    for k in keys:
+        v = q.get(k)
+        if v not in (None, "", 0, "0"):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _quotes(tokens: list[str]) -> dict[str, dict]:
     if not tokens:
         return {}
@@ -159,16 +178,16 @@ def _quotes(tokens: list[str]) -> dict[str, dict]:
             fetched = fetched.get("fetched") or []
         for q in fetched or []:
             tok = str(q.get("symbolToken") or q.get("token") or "")
-            ltp = q.get("ltp") or q.get("lastPrice")
             depth = q.get("depth") or {}
             buy = (depth.get("buy") or [{}])[:1]
             sell = (depth.get("sell") or [{}])[:1]
-            bid = (buy[0] or {}).get("price") if buy else q.get("bidPrice")
-            ask = (sell[0] or {}).get("price") if sell else q.get("askPrice")
+            ltp = _px(q, "ltp", "lastPrice", "lastTradedPrice")
+            opn = _px(q, "open", "opn", "openPrice", "op")
             out[tok] = {
                 "ltp": ltp,
-                "bid": bid,
-                "ask": ask,
+                "open": opn,
+                "bid": (buy[0] or {}).get("price") if buy else _px(q, "bidPrice"),
+                "ask": (sell[0] or {}).get("price") if sell else _px(q, "askPrice"),
                 "oi": q.get("opnInterest") or q.get("oi") or 0,
                 "oi_change": 0,
                 "iv": None,
@@ -196,23 +215,26 @@ def snapshot(symbol: str = "NIFTY", expiry_iso: str | None = None) -> dict:
     spot = _spot()
     tokens = [str(r.get("token")) for r in legs if r.get("token")]
     if spot and legs:
-        ranked = sorted(legs, key=lambda r: abs(float(r.get("strike") or 0) - spot))
+        ranked = sorted(legs, key=lambda r: abs(_strike(r) - spot))
         tokens = [str(r.get("token")) for r in ranked[:80] if r.get("token")]
     quotes = _quotes(tokens)
 
     rows_map: dict[float, dict] = {}
     for r in legs:
-        strike = float(r.get("strike") or 0)
+        strike = _strike(r)
         opt = _opt_type(r)
         if not strike or not opt:
             continue
         q = quotes.get(str(r.get("token"))) or {
-            "ltp": None, "bid": None, "ask": None, "oi": 0, "oi_change": 0, "iv": None, "volume": 0,
+            "ltp": None, "open": None, "bid": None, "ask": None, "oi": 0, "oi_change": 0, "iv": None, "volume": 0,
         }
         slot = rows_map.setdefault(strike, {"strike": strike, "expiry": expiry_iso, "CE": None, "PE": None})
         slot[opt] = q
 
     rows = [rows_map[k] for k in sorted(rows_map)]
+    # keep a usable Nifty window
+    if spot:
+        rows = [r for r in rows if abs(r["strike"] - spot) <= 2500] or rows
     strikes = [r["strike"] for r in rows]
     atm = min(strikes, key=lambda k: abs(k - spot)) if strikes and spot else (strikes[len(strikes)//2] if strikes else None)
     atm_ce = next((r["CE"] for r in rows if r["strike"] == atm and r["CE"]), None) if atm else None
@@ -222,7 +244,7 @@ def snapshot(symbol: str = "NIFTY", expiry_iso: str | None = None) -> dict:
         "underlying": spot,
         "forward": spot,
         "expiry": expiry_iso,
-        "expiries": expiries,
+        "expiries": [e for e in expiries if e >= datetime.utcnow().date().isoformat()][:12] or expiries,
         "atm_strike": atm,
         "atm_ce_premium": (atm_ce or {}).get("ltp"),
         "atm_pe_premium": (atm_pe or {}).get("ltp"),
